@@ -1,3 +1,8 @@
+/* Prevent width overflow from padding/borders */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
 :root {
   font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
@@ -22,19 +27,21 @@ a:hover {
   color: #535bf2;
 }
 
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
 body {
   margin: 0;
-  display: flex;
-  place-items: center;
   min-width: 320px;
   min-height: 100vh;
+  overflow-x: hidden;
 }
 
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
-}
-
+/* Common button styling */
 button {
   border-radius: 8px;
   border: 1px solid transparent;
@@ -54,6 +61,85 @@ button:focus-visible {
   outline: 4px auto -webkit-focus-ring-color;
 }
 
+.auth-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Center only auth pages */
+.auth-form {
+  width: 360px;
+  padding: 24px;
+  border-radius: 12px;
+  background: #1f1f1f;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+
+  /* center on screen */
+  margin: 0 auto;
+  margin-top: 12vh;
+}
+
+.auth-form input,
+.auth-form button {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #444;
+  background: #111;
+  color: #fff;
+}
+
+.auth-form h2 {
+  margin: 0 0 8px;
+}
+
+/* Dashboard layout */
+.dashboard-page {
+  width: 100%;
+  min-height: 100vh;
+}
+
+/* Top bar stays full width */
+.topbar {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #1f1f1f;
+  padding: 12px 20px;
+  border-bottom: 1px solid #444;
+}
+
+/* Center the page content */
+.dashboard-content {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 40px 20px;
+  text-align: center;
+}
+
+/* Smaller title */
+.dashboard-content h2 {
+  font-size: 28px;
+  margin: 0 0 20px;
+}
+
+/* Center buttons */
+.systems {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+/* Button size for systems */
+.systems button {
+  padding: 10px 16px;
+  font-size: 14px;
+}
 @media (prefers-color-scheme: light) {
   :root {
     color: #213547;
@@ -64,5 +150,15 @@ button:focus-visible {
   }
   button {
     background-color: #f9f9f9;
+  }
+  .auth-form {
+    background: #ffffff;
+    border: 1px solid #ddd;
+  }
+  .auth-form input,
+  .auth-form button {
+    background: #fff;
+    color: #213547;
+    border: 1px solid #ccc;
   }
 }

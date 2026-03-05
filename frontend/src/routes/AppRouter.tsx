@@ -9,19 +9,13 @@ export default function AppRouter() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* redirection page initiale */}
         <Route path="/" element={<Navigate to="/app" replace />} />
 
-        {/* pages publiques */}
-        <Route path="/SignIn" element={<SignInPage />} />
-        <Route path="/SignUp" element={<SignUpPage />} />
+        <Route path="/signin" element={<SignInPage />} />
+        <Route path="/signup" element={<SignUpPage />} />
 
-        {/* pages protégées */}
-        <Route element={<ProtectedRoute />}>
-          <Route path="/app" element={<DashboardPage />} />
-        </Route>
+        <Route path="/app" element={<DashboardPage />} />
 
-        {/* fallback si route inconnue */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
