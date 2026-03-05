@@ -16,7 +16,7 @@ export default function SignUpPage() {
   return (
     <div className="auth-page">
       <form className="auth-form" onSubmit={submit}>
-        <h2>Sign Up</h2>
+        <h2>Sign In</h2>
 
         <input
           type="email"
@@ -35,7 +35,7 @@ export default function SignUpPage() {
         <button type="submit">Create account</button>
 
         <p style={{ marginTop: 8 }}>
-          Already have an account? <Link to="/signin">Sign in</Link>
+          Don't have an account? <Link to="/signup">Sign up</Link>
         </p>
       </form>
     </div>
