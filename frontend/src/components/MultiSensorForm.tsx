@@ -1,26 +1,68 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 interface Props {
   onClose: () => void;
+  projects: string[];
 }
 
-export default function MultiSensorForm({ onClose }: Props) {
+export default function MultiSensorForm({ onClose, projects }: Props) {
+  const nav = useNavigate();
+
   const previousSamples = ["River A", "Lake B", "Station 3"];
   const previousRegions = ["North", "South", "Central"];
 
+  const [projectName, setProjectName] = useState("");
   const [sampleName, setSampleName] = useState("");
   const [region, setRegion] = useState("");
+  const [error, setError] = useState("");
 
   function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
-    const data = {
-      sampleName,
-      region,
+    const trimmedProjectName = projectName.trim();
+
+    if (!trimmedProjectName) {
+      setError("Project name is required.");
+      return;
+    }
+
+    const duplicateProject = projects.some(
+      (project) =>
+        project.trim().toLowerCase() === trimmedProjectName.toLowerCase()
+    );
+
+    if (duplicateProject) {
+      setError("This project name already exists.");
+      return;
+    }
+
+    setError("");
+
+    const savedProject = {
+      userId: "user",
+      projectName: trimmedProjectName,
+      systemType: "multisensor",
+      timestamp: new Date().toISOString(),
+      formData: {
+        sampleName,
+        region,
+      },
+      manualData: [],
+      collectedData: [],
     };
 
-    console.log("MultiSensor Data:", data);
+    const existingProjects = JSON.parse(
+      localStorage.getItem("savedProjects") || "[]"
+    );
+
+    existingProjects.push(savedProject);
+    localStorage.setItem("savedProjects", JSON.stringify(existingProjects));
+
+    // removed console.log
+
     onClose();
+    nav(`/project/${encodeURIComponent(trimmedProjectName)}`);
   }
 
   return (
@@ -29,6 +71,15 @@ export default function MultiSensorForm({ onClose }: Props) {
         <h3>MultiSensor System</h3>
 
         <form onSubmit={submit}>
+          <label htmlFor="projectName">Project name</label>
+          <input
+            id="projectName"
+            value={projectName}
+            required
+            onChange={(e) => setProjectName(e.target.value)}
+            placeholder="Enter project name"
+          />
+
           <label htmlFor="sampleName">Sample name</label>
           <input
             id="sampleName"
@@ -58,6 +109,8 @@ export default function MultiSensorForm({ onClose }: Props) {
               <option key={i} value={item} />
             ))}
           </datalist>
+
+          {error && <p className="form-error">{error}</p>}
 
           <div className="modal-actions">
             <button type="submit">Start Measurement</button>

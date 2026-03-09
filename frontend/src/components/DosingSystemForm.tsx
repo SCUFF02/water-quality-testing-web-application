@@ -1,11 +1,17 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 type Props = {
   onClose: () => void;
+  projects: string[];
 };
 
-export default function DosingSystemForm({ onClose }: Props) {
+export default function DosingSystemForm({ onClose, projects }: Props) {
+  const nav = useNavigate();
+
   const previousSources = ["Well A", "Tank B", "River"];
+
+  const [projectName, setProjectName] = useState("");
   const [sources, setSources] = useState<string[]>(
     Array.from({ length: 10 }, () => "")
   );
@@ -37,27 +43,64 @@ export default function DosingSystemForm({ onClose }: Props) {
   function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
-    const normalized = sources
+    const trimmedProjectName = projectName.trim();
+
+    if (!trimmedProjectName) {
+      setError("Project name is required.");
+      return;
+    }
+
+    const duplicateProject = projects.some(
+      (project) =>
+        project.trim().toLowerCase() === trimmedProjectName.toLowerCase()
+    );
+
+    if (duplicateProject) {
+      setError("This project name already exists.");
+      return;
+    }
+
+    const normalizedSources = sources
       .map((item) => item.trim().toLowerCase())
       .filter(Boolean);
 
-    const hasDuplicate = normalized.some(
-      (item, i) => normalized.indexOf(item) !== i
+    const hasDuplicateSources = normalizedSources.some(
+      (item, i) => normalizedSources.indexOf(item) !== i
     );
 
-    if (hasDuplicate) {
+    if (hasDuplicateSources) {
       setError("Source names must be unique.");
       return;
     }
 
-    const data = {
-      sources,
-      liquid,
-      concentration,
+    setError("");
+
+    const savedProject = {
+      userId: "user",
+      projectName: trimmedProjectName,
+      systemType: "dosing",
+      timestamp: new Date().toISOString(),
+      formData: {
+        sources,
+        liquid,
+        concentration,
+      },
+      manualData: [],
+      collectedData: [],
     };
 
-    console.log("Dosing Data:", data);
+    const existingProjects = JSON.parse(
+      localStorage.getItem("savedProjects") || "[]"
+    );
+
+    existingProjects.push(savedProject);
+
+    localStorage.setItem("savedProjects", JSON.stringify(existingProjects));
+
+    console.log("Dosing Data:", savedProject);
+
     onClose();
+    nav(`/project/${encodeURIComponent(trimmedProjectName)}`);
   }
 
   return (
@@ -66,6 +109,15 @@ export default function DosingSystemForm({ onClose }: Props) {
         <h3>Dosing System</h3>
 
         <form onSubmit={submit}>
+          <label htmlFor="projectName">Project name</label>
+          <input
+            id="projectName"
+            value={projectName}
+            required
+            onChange={(e) => setProjectName(e.target.value)}
+            placeholder="Enter project name"
+          />
+
           {sources.map((source, i) => (
             <div key={i}>
               <label htmlFor={`source-${i}`}>Sample {i + 1} source</label>
