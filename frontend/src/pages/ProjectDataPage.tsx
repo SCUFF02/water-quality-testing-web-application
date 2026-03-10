@@ -124,6 +124,8 @@ export default function ProjectDataPage() {
 
   const maxY = 100;
 
+  const fd = project.formData;
+
   return (
     <div className="project-data-page">
 
@@ -167,6 +169,73 @@ export default function ProjectDataPage() {
             <button type="button" onClick={addManualData}>
               Add manual data
             </button>
+          </div>
+
+          {/* PROJECT INFO PANEL */}
+          <div style={{
+            marginTop: "4px",
+            padding: "14px",
+            background: "#eef4f7",
+            borderRadius: "12px",
+            border: "1px solid #d9e2ec",
+            fontSize: "14px",
+            color: "#1f2d4d",
+            display: "flex",
+            flexDirection: "column",
+            gap: "10px",
+          }}>
+            {/* System type badge */}
+            <div style={{
+              fontWeight: 700,
+              fontSize: "12px",
+              background: "var(--primary)",
+              color: "#fff",
+              borderRadius: "6px",
+              padding: "5px 10px",
+              textAlign: "center",
+              letterSpacing: "0.5px",
+              textTransform: "uppercase",
+            }}>
+              {project.systemType === "dosing" ? " Dosing System" : " MultiSensor System"}
+            </div>
+
+            {/* Dosing fields */}
+            {project.systemType === "dosing" && (
+              <>
+                <div>
+                  <span style={{ fontWeight: 600 }}>Dosing liquid: </span>
+                  {String(fd.liquid || "—")}
+                </div>
+                <div>
+                  <span style={{ fontWeight: 600 }}>Target concentration: </span>
+                  {String(fd.concentration || "—")}
+                </div>
+                <div>
+                  <span style={{ fontWeight: 600 }}>Sources:</span>
+                  <ul style={{ margin: "6px 0 0 16px", padding: 0, display: "flex", flexDirection: "column", gap: "2px" }}>
+                    {(fd.sources as string[])
+                      .filter((s) => s.trim())
+                      .map((s, i) => (
+                        <li key={i}>{s}</li>
+                      ))}
+                  </ul>
+                </div>
+              </>
+            )}
+
+            {/* MultiSensor fields */}
+            {project.systemType === "multisensor" && (
+              <>
+                <div>
+                  <span style={{ fontWeight: 600 }}>Sample: </span>
+                  {String(fd.sampleName || "—")}
+                </div>
+                <div>
+                  <span style={{ fontWeight: 600 }}>Region: </span>
+                  {String(fd.region || "—")}
+                </div>
+              </>
+            )}
           </div>
         </aside>
 
