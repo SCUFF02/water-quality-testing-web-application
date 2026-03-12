@@ -9,8 +9,8 @@ type SavedProject = {
   systemType: "multisensor" | "dosing";
   timestamp: string;
   formData: Record<string, unknown>;
-  manualData: [];
-  collectedData: [];
+  manualData: unknown[];
+  collectedData: unknown[];
 };
 
 export default function DashboardPage() {
@@ -32,7 +32,7 @@ export default function DashboardPage() {
   const username = "user";
 
   useEffect(() => {
-    const stored = JSON.parse(localStorage.getItem("savedProjects") || "[]");
+    const stored: SavedProject[] = JSON.parse(localStorage.getItem("savedProjects") || "[]");
     setProjects(stored);
   }, [multiOpen, dosingOpen]);
 
@@ -73,6 +73,9 @@ export default function DashboardPage() {
     setHistory((prev) => ["Ouverture du système Dosing System", ...prev]);
   }
 
+  // Last 4 projects (most recently created = end of array)
+  const recentProjects = [...projects].reverse().slice(0, 4);
+
   return (
     <div className="dashboard-page">
       <header className="topbar">
@@ -88,62 +91,89 @@ export default function DashboardPage() {
       <main className="dashboard-layout">
         <aside className="user-panel">
           <div className="projects-card">
-            <h2>{username}</h2>
 
-            <h2>Historic</h2>
+            {/* Clickable username — navigates to profile */}
+            <button
+              type="button"
+              className="username-btn"
+              onClick={() => nav("/profile")}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                <circle cx="12" cy="7" r="4"/>
+              </svg>
+              {username}
+            </button>
+
+            <h2>History</h2>
             <ul className="history-list">
               {history.map((item, index) => (
                 <li key={index}>{item}</li>
               ))}
             </ul>
 
-            <h2>Projects</h2>
+            <h2>Recent Projects</h2>
 
-            {projects.length === 0 ? (
+            {recentProjects.length === 0 ? (
               <p>Aucun projet disponible.</p>
             ) : (
-              projects.map((project, index) => (
-                <div className="project-item" key={index}>
-                  <span
-                    className="project-name"
-                    style={{ cursor: "pointer" }}
-                    onClick={() =>
-                      nav(`/project/${encodeURIComponent(project.projectName)}`)
-                    }
-                  >
-                    {project.projectName}
-                  </span>
-                  <div className="project-actions">
-                    <button
-                      type="button"
-                      className="icon-btn rename-btn"
-                      onClick={() => renameProject(project.projectName)}
-                      title="Renommer"
-                      aria-label={`Renommer ${project.projectName}`}
+              <>
+                {recentProjects.map((project, index) => (
+                  <div className="project-item" key={index}>
+                    <span
+                      className="project-name"
+                      style={{ cursor: "pointer" }}
+                      onClick={() =>
+                        nav(`/project/${encodeURIComponent(project.projectName)}`)
+                      }
                     >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                      </svg>
-                    </button>
-                    <button
-                      type="button"
-                      className="icon-btn delete-btn"
-                      onClick={() => deleteProject(project.projectName)}
-                      title="Supprimer"
-                      aria-label={`Supprimer ${project.projectName}`}
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="3 6 5 6 21 6"/>
-                        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                        <path d="M10 11v6"/>
-                        <path d="M14 11v6"/>
-                        <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-                      </svg>
-                    </button>
+                      {project.projectName}
+                      <span className={`project-type-badge ${project.systemType}`}>
+                        {project.systemType === "multisensor" ? "MultiSensor" : "Dosing"}
+                      </span>
+                    </span>
+                    <div className="project-actions">
+                      <button
+                        type="button"
+                        className="icon-btn rename-btn"
+                        onClick={() => renameProject(project.projectName)}
+                        title="Renommer"
+                        aria-label={`Renommer ${project.projectName}`}
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-btn delete-btn"
+                        onClick={() => deleteProject(project.projectName)}
+                        title="Supprimer"
+                        aria-label={`Supprimer ${project.projectName}`}
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="3 6 5 6 21 6"/>
+                          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                          <path d="M10 11v6"/>
+                          <path d="M14 11v6"/>
+                          <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                        </svg>
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))
+                ))}
+
+                {projects.length > 4 && (
+                  <button
+                    type="button"
+                    className="see-all-btn"
+                    onClick={() => nav("/profile")}
+                  >
+                    +{projects.length - 4} more — see all
+                  </button>
+                )}
+              </>
             )}
           </div>
         </aside>

@@ -6,22 +6,9 @@ type Props = {
   projects: string[];
 };
 
-type ParameterTarget = {
-  name: string;
-  target: string;
-  unit: string;
-};
+const PARAMETERS = ["pH", "Turbidity", "TDS", "Temperature", "Conductivity", "Dissolved Oxygen", "Nitrates"];
 
-const AVAILABLE_PARAMETERS: { name: string; unit: string; placeholder: string }[] = [
-  { name: "pH",               unit: "",       placeholder: "e.g. 7.0" },
-  { name: "Turbidity",        unit: "NTU",    placeholder: "e.g. 5" },
-  { name: "TDS",              unit: "ppm",    placeholder: "e.g. 500" },
-  { name: "Temperature",      unit: "°C",     placeholder: "e.g. 25" },
-  { name: "Conductivity",     unit: "µS/cm",  placeholder: "e.g. 400" },
-  { name: "Dissolved Oxygen", unit: "mg/L",   placeholder: "e.g. 8" },
-  { name: "Chlorine",         unit: "mg/L",   placeholder: "e.g. 0.5" },
-  { name: "Nitrates",         unit: "mg/L",   placeholder: "e.g. 10" },
-];
+const LIQUIDS = ["Chlorine", "Alum", "Lime", "Ferric Sulfate", "Sodium Hypochlorite", "Hydrogen Peroxide", "Ozone", "Fluoride"];
 
 export default function DosingSystemForm({ onClose, projects }: Props) {
   const nav = useNavigate();
@@ -30,16 +17,13 @@ export default function DosingSystemForm({ onClose, projects }: Props) {
 
   const [step, setStep]               = useState<1 | 2>(1);
   const [projectName, setProjectName] = useState("");
+  const [sampleCount, setSampleCount] = useState(1);
   const [selectedParams, setSelectedParams] = useState<string[]>([]);
-  const [paramTargets, setParamTargets]     = useState<Record<string, string>>({});
+  const [selectedLiquids, setSelectedLiquids] = useState<string[]>([]);
   const [sources, setSources] = useState<string[]>(
     Array.from({ length: 10 }, () => "")
   );
   const [error, setError] = useState("");
-
-  function isSelected(name: string) {
-    return selectedParams.includes(name);
-  }
 
   function toggleParam(name: string) {
     setSelectedParams((prev) =>
@@ -48,8 +32,10 @@ export default function DosingSystemForm({ onClose, projects }: Props) {
     setError("");
   }
 
-  function setTarget(name: string, value: string) {
-    setParamTargets((prev) => ({ ...prev, [name]: value }));
+  function toggleLiquid(name: string) {
+    setSelectedLiquids((prev) =>
+      prev.includes(name) ? prev.filter((l) => l !== name) : [...prev, name]
+    );
     setError("");
   }
 
@@ -73,14 +59,18 @@ export default function DosingSystemForm({ onClose, projects }: Props) {
     );
     if (duplicate) { setError("This project name already exists."); return; }
 
+    if (sampleCount < 1 || sampleCount > 10) {
+      setError("Number of sources must be between 1 and 10.");
+      return;
+    }
+
     if (selectedParams.length === 0) {
       setError("Select at least one parameter to monitor.");
       return;
     }
 
-    const missingTarget = selectedParams.some((p) => !paramTargets[p]?.trim());
-    if (missingTarget) {
-      setError("Please enter a target value for each selected parameter.");
+    if (selectedLiquids.length === 0) {
+      setError("Select at least one dosing liquid.");
       return;
     }
 
@@ -89,10 +79,11 @@ export default function DosingSystemForm({ onClose, projects }: Props) {
   }
 
   function validate(): boolean {
-    const emptySource = sources.some((s) => !s.trim());
-    if (emptySource) { setError("All 10 source names are required."); return false; }
+    const activeSources = sources.slice(0, sampleCount);
+    const emptySource = activeSources.some((s) => !s.trim());
+    if (emptySource) { setError(`All ${sampleCount} source names are required.`); return false; }
 
-    const normalized = sources.map((s) => s.trim().toLowerCase());
+    const normalized = activeSources.map((s) => s.trim().toLowerCase());
     const hasDuplicate = normalized.some((s, i) => normalized.indexOf(s) !== i);
     if (hasDuplicate) { setError("Source names must be unique."); return false; }
 
@@ -103,17 +94,17 @@ export default function DosingSystemForm({ onClose, projects }: Props) {
   function saveAndNavigate(manualOnly: boolean) {
     if (!validate()) return;
 
-    const parameters: ParameterTarget[] = selectedParams.map((name) => {
-      const meta = AVAILABLE_PARAMETERS.find((p) => p.name === name)!;
-      return { name, target: paramTargets[name] || "", unit: meta.unit };
-    });
-
     const savedProject = {
       userId: "user",
       projectName: projectName.trim(),
       systemType: "dosing",
       timestamp: new Date().toISOString(),
-      formData: { sources, parameters, manualOnly },
+      formData: {
+        sources: sources.slice(0, sampleCount),
+        parameters: selectedParams,
+        liquids: selectedLiquids,
+        manualOnly,
+      },
       manualData: [],
       collectedData: [],
     };
@@ -125,8 +116,6 @@ export default function DosingSystemForm({ onClose, projects }: Props) {
     onClose();
     nav(`/project/${encodeURIComponent(projectName.trim())}`);
   }
-
-  const selectedParamList = AVAILABLE_PARAMETERS.filter((p) => isSelected(p.name));
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -147,46 +136,46 @@ export default function DosingSystemForm({ onClose, projects }: Props) {
               onChange={(e) => { setProjectName(e.target.value); setError(""); }}
             />
 
+            <label htmlFor="sampleCount">Number of sources (1–10)</label>
+            <input
+              id="sampleCount"
+              type="number"
+              min={1}
+              max={10}
+              value={sampleCount}
+              required
+              onChange={(e) => { setSampleCount(Number(e.target.value)); setError(""); }}
+            />
+
+            {/* Parameters list */}
             <p className="param-section-label">Parameters to monitor</p>
             <div className="param-toggle-grid">
-              {AVAILABLE_PARAMETERS.map((p) => (
+              {PARAMETERS.map((p) => (
                 <button
-                  key={p.name}
+                  key={p}
                   type="button"
-                  className={`param-toggle${isSelected(p.name) ? " param-toggle-active" : ""}`}
-                  onClick={() => toggleParam(p.name)}
+                  className={`param-toggle${selectedParams.includes(p) ? " param-toggle-active" : ""}`}
+                  onClick={() => toggleParam(p)}
                 >
-                  {p.name}
-                  {p.unit && <span className="param-unit"> ({p.unit})</span>}
+                  {p}
                 </button>
               ))}
             </div>
 
-            {selectedParamList.length > 0 && (
-              <>
-                <p className="param-section-label" style={{ marginTop: 16 }}>
-                  Target values
-                </p>
-                <div className="param-targets-grid">
-                  {selectedParamList.map((p) => (
-                    <div key={p.name} className="param-target-row">
-                      <label htmlFor={`target-${p.name}`}>
-                        {p.name}{p.unit ? ` (${p.unit})` : ""}
-                      </label>
-                      <input
-                        id={`target-${p.name}`}
-                        type="number"
-                        step="any"
-                        value={paramTargets[p.name] || ""}
-                        placeholder={p.placeholder}
-                        required
-                        onChange={(e) => setTarget(p.name, e.target.value)}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
+            {/* Liquids list */}
+            <p className="param-section-label" style={{ marginTop: 16 }}>Dosing liquids</p>
+            <div className="param-toggle-grid">
+              {LIQUIDS.map((l) => (
+                <button
+                  key={l}
+                  type="button"
+                  className={`param-toggle${selectedLiquids.includes(l) ? " param-toggle-active param-toggle-liquid" : ""}`}
+                  onClick={() => toggleLiquid(l)}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
 
             {error && <p className="form-error">{error}</p>}
 
@@ -197,20 +186,22 @@ export default function DosingSystemForm({ onClose, projects }: Props) {
           </form>
         )}
 
-        {/* STEP 2 */}
+        {/* STEP 2 — Sources */}
         {step === 2 && (
           <div>
-            <div className="step-indicator">Step 2 of 2 — Sources (10 required)</div>
+            <div className="step-indicator">
+              Step 2 of 2 — Sources ({sampleCount} required)
+            </div>
 
             <div className="samples-grid">
-              {sources.map((source, i) => (
+              {Array.from({ length: sampleCount }, (_, i) => (
                 <div key={i} className="sample-entry">
                   <p className="sample-entry-title">Source {i + 1}</p>
                   <label htmlFor={`source-${i}`}>Source name</label>
                   <input
                     id={`source-${i}`}
                     list="sources-list"
-                    value={source}
+                    value={sources[i]}
                     required
                     placeholder="e.g. Well A"
                     onChange={(e) => updateSource(i, e.target.value)}
@@ -249,3 +240,4 @@ export default function DosingSystemForm({ onClose, projects }: Props) {
     </div>
   );
 }
+
