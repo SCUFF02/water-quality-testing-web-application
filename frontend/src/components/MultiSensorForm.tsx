@@ -14,6 +14,11 @@ type SampleEntry = {
 export default function MultiSensorForm({ onClose, projects }: Props) {
   const nav = useNavigate();
 
+  const currentUsername: string = (() => {
+    try { return JSON.parse(localStorage.getItem("currentUser") || "{}").username || "user"; }
+    catch { return "user"; }
+  })();
+
   const previousSamples = ["River A", "Lake B", "Station 3"];
   const previousRegions = ["North", "South", "Central"];
 
@@ -71,7 +76,7 @@ export default function MultiSensorForm({ onClose, projects }: Props) {
     if (!validateSamples()) return;
 
     const savedProject = {
-      userId: "user",
+      userId: currentUsername,
       projectName: projectName.trim(),
       systemType: "multisensor",
       timestamp: new Date().toISOString(),

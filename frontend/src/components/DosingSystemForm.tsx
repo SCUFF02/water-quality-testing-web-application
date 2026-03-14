@@ -1,20 +1,25 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-
+ 
 type Props = {
   onClose: () => void;
   projects: string[];
 };
-
+ 
 const PARAMETERS = ["pH", "Turbidity", "TDS", "Temperature", "Conductivity", "Dissolved Oxygen", "Nitrates"];
-
+ 
 const LIQUIDS = ["Chlorine", "Alum", "Lime", "Ferric Sulfate", "Sodium Hypochlorite", "Hydrogen Peroxide", "Ozone", "Fluoride"];
-
+ 
 export default function DosingSystemForm({ onClose, projects }: Props) {
   const nav = useNavigate();
-
+ 
+  const currentUsername: string = (() => {
+    try { return JSON.parse(localStorage.getItem("currentUser") || "{}").username || "user"; }
+    catch { return "user"; }
+  })();
+ 
   const previousSources = ["Well A", "Tank B", "River"];
-
+ 
   const [step, setStep]               = useState<1 | 2>(1);
   const [projectName, setProjectName] = useState("");
   const [sampleCount, setSampleCount] = useState(1);
@@ -24,21 +29,21 @@ export default function DosingSystemForm({ onClose, projects }: Props) {
     Array.from({ length: 10 }, () => "")
   );
   const [error, setError] = useState("");
-
+ 
   function toggleParam(name: string) {
     setSelectedParams((prev) =>
       prev.includes(name) ? prev.filter((p) => p !== name) : [...prev, name]
     );
     setError("");
   }
-
+ 
   function toggleLiquid(name: string) {
     setSelectedLiquids((prev) =>
       prev.includes(name) ? prev.filter((l) => l !== name) : [...prev, name]
     );
     setError("");
   }
-
+ 
   function updateSource(index: number, value: string) {
     const next = [...sources];
     next[index] = value;
@@ -47,55 +52,55 @@ export default function DosingSystemForm({ onClose, projects }: Props) {
     setError(hasDuplicate ? "Source names must be unique." : "");
     setSources(next);
   }
-
+ 
   function goToStep2(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-
+ 
     const trimmed = projectName.trim();
     if (!trimmed) { setError("Project name is required."); return; }
-
+ 
     const duplicate = projects.some(
       (p) => p.trim().toLowerCase() === trimmed.toLowerCase()
     );
     if (duplicate) { setError("This project name already exists."); return; }
-
+ 
     if (sampleCount < 1 || sampleCount > 10) {
       setError("Number of sources must be between 1 and 10.");
       return;
     }
-
+ 
     if (selectedParams.length === 0) {
       setError("Select at least one parameter to monitor.");
       return;
     }
-
+ 
     if (selectedLiquids.length === 0) {
       setError("Select at least one dosing liquid.");
       return;
     }
-
+ 
     setError("");
     setStep(2);
   }
-
+ 
   function validate(): boolean {
     const activeSources = sources.slice(0, sampleCount);
     const emptySource = activeSources.some((s) => !s.trim());
     if (emptySource) { setError(`All ${sampleCount} source names are required.`); return false; }
-
+ 
     const normalized = activeSources.map((s) => s.trim().toLowerCase());
     const hasDuplicate = normalized.some((s, i) => normalized.indexOf(s) !== i);
     if (hasDuplicate) { setError("Source names must be unique."); return false; }
-
+ 
     setError("");
     return true;
   }
-
+ 
   function saveAndNavigate(manualOnly: boolean) {
     if (!validate()) return;
-
+ 
     const savedProject = {
-      userId: "user",
+      userId: currentUsername,
       projectName: projectName.trim(),
       systemType: "dosing",
       timestamp: new Date().toISOString(),
@@ -108,25 +113,25 @@ export default function DosingSystemForm({ onClose, projects }: Props) {
       manualData: [],
       collectedData: [],
     };
-
+ 
     const existingProjects = JSON.parse(localStorage.getItem("savedProjects") || "[]");
     existingProjects.push(savedProject);
     localStorage.setItem("savedProjects", JSON.stringify(existingProjects));
-
+ 
     onClose();
     nav(`/project/${encodeURIComponent(projectName.trim())}`);
   }
-
+ 
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal modal-large" onClick={(e) => e.stopPropagation()}>
         <h3>Dosing System</h3>
-
+ 
         {/* STEP 1 */}
         {step === 1 && (
           <form onSubmit={goToStep2}>
             <div className="step-indicator">Step 1 of 2 — Project setup</div>
-
+ 
             <label htmlFor="projectName">Project name</label>
             <input
               id="projectName"
@@ -135,7 +140,7 @@ export default function DosingSystemForm({ onClose, projects }: Props) {
               placeholder="Enter project name"
               onChange={(e) => { setProjectName(e.target.value); setError(""); }}
             />
-
+ 
             <label htmlFor="sampleCount">Number of sources (1–10)</label>
             <input
               id="sampleCount"
@@ -146,7 +151,7 @@ export default function DosingSystemForm({ onClose, projects }: Props) {
               required
               onChange={(e) => { setSampleCount(Number(e.target.value)); setError(""); }}
             />
-
+ 
             {/* Parameters list */}
             <p className="param-section-label">Parameters to monitor</p>
             <div className="param-toggle-grid">
@@ -161,7 +166,7 @@ export default function DosingSystemForm({ onClose, projects }: Props) {
                 </button>
               ))}
             </div>
-
+ 
             {/* Liquids list */}
             <p className="param-section-label" style={{ marginTop: 16 }}>Dosing liquids</p>
             <div className="param-toggle-grid">
@@ -176,23 +181,23 @@ export default function DosingSystemForm({ onClose, projects }: Props) {
                 </button>
               ))}
             </div>
-
+ 
             {error && <p className="form-error">{error}</p>}
-
+ 
             <div className="modal-actions">
               <button type="submit">Next</button>
               <button type="button" onClick={onClose}>Cancel</button>
             </div>
           </form>
         )}
-
+ 
         {/* STEP 2 — Sources */}
         {step === 2 && (
           <div>
             <div className="step-indicator">
               Step 2 of 2 — Sources ({sampleCount} required)
             </div>
-
+ 
             <div className="samples-grid">
               {Array.from({ length: sampleCount }, (_, i) => (
                 <div key={i} className="sample-entry">
@@ -209,13 +214,13 @@ export default function DosingSystemForm({ onClose, projects }: Props) {
                 </div>
               ))}
             </div>
-
+ 
             <datalist id="sources-list">
               {previousSources.map((s, i) => <option key={i} value={s} />)}
             </datalist>
-
+ 
             {error && <p className="form-error">{error}</p>}
-
+ 
             <div className="modal-actions-column">
               <div className="modal-actions-row">
                 <button type="button" onClick={() => saveAndNavigate(false)}>
@@ -240,4 +245,3 @@ export default function DosingSystemForm({ onClose, projects }: Props) {
     </div>
   );
 }
-
