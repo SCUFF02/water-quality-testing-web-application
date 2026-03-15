@@ -91,9 +91,12 @@ export default function AppRouter() {
         <Route path="/admin"
           element={<AdminRoute><AdminPage /></AdminRoute>} />
 
+        {/* Admin project view */}
+        <Route path="/admin/project/:projectName"
+          element={<AdminRoute><ProjectDataPage /></AdminRoute>} />
+
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
   );
 }
-

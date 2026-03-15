@@ -223,7 +223,7 @@ export default function AdminPage() {
                             <button
                               type="button"
                               className="btn-ghost admin-action-btn"
-                              onClick={() => nav(`/project/${encodeURIComponent(p.projectName)}`)}
+                              onClick={() => nav(`/admin/project/${encodeURIComponent(p.projectName)}`)}
                             >
                               View
                             </button>
@@ -410,7 +410,7 @@ export default function AdminPage() {
                             <button
                               type="button"
                               className="btn-ghost admin-action-btn"
-                              onClick={() => nav(`/project/${encodeURIComponent(p.projectName)}`)}
+                              onClick={() => nav(`/admin/project/${encodeURIComponent(p.projectName)}`)}
                             >
                               View
                             </button>
@@ -458,4 +458,3 @@ export default function AdminPage() {
     </div>
   );
 }
-
