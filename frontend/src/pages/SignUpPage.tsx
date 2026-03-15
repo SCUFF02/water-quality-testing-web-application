@@ -1,6 +1,17 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
- 
+
+/**
+ * Sign Up Page
+ *
+ * What happens when user clicks Create Account:
+ * 1. Validates inputs locally (length, duplicates)
+ * 2. Sends username, email, password, role to backend (POST /auth/register)
+ * 3. Backend creates the user in the database
+ * 4. Redirects to Sign In page
+ *
+ * Note: NO more localStorage for users — the database is now the source of truth.
+ */
 export default function SignUpPage() {
   const [username, setUsername] = useState("");
   const [email,    setEmail]    = useState("");
@@ -9,41 +20,54 @@ export default function SignUpPage() {
   const [error,    setError]    = useState("");
   const [success,  setSuccess]  = useState(false);
   const nav = useNavigate();
- 
-  function isUsernameTaken(name: string) {
-    const ex = JSON.parse(localStorage.getItem("registeredUsers") || "[]");
-    return ex.some((u: { username: string }) => u.username.trim().toLowerCase() === name.trim().toLowerCase());
-  }
-  function isEmailTaken(val: string) {
-    const ex = JSON.parse(localStorage.getItem("registeredUsers") || "[]");
-    return ex.some((u: { email: string }) => u.email.trim().toLowerCase() === val.trim().toLowerCase());
-  }
- 
-  function submit(e: React.FormEvent<HTMLFormElement>) {
+
+  async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const trimmed = username.trim();
-    if (!trimmed)                 { setError("Username is required."); return; }
-    if (trimmed.length < 3)       { setError("Username must be at least 3 characters."); return; }
-    if (isUsernameTaken(trimmed)) { setError("This username is already taken."); return; }
-    if (isEmailTaken(email))      { setError("An account with this email already exists."); return; }
-    if (password.length < 6)      { setError("Password must be at least 6 characters."); return; }
+
+    // Local validation before sending to server
+    if (!trimmed)           { setError("Username is required."); return; }
+    if (trimmed.length < 3) { setError("Username must be at least 3 characters."); return; }
+    if (password.length < 6){ setError("Password must be at least 6 characters."); return; }
+
     setError("");
-    const ex = JSON.parse(localStorage.getItem("registeredUsers") || "[]");
-    ex.push({ username: trimmed, email, password, role });
-    localStorage.setItem("registeredUsers", JSON.stringify(ex));
-    setSuccess(true);
-    setTimeout(() => nav("/signin", { replace: true }), 1400);
+
+    try {
+      const res = await fetch("http://localhost:8000/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: trimmed,
+          email,
+          password,
+          role,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        // Backend error — e.g. "Email already registered" or "Username already taken"
+        setError(data.detail || "Registration failed.");
+        return;
+      }
+
+      // Success — show message and redirect to login after 1.4 seconds
+      setSuccess(true);
+      setTimeout(() => nav("/signin", { replace: true }), 1400);
+
+    } catch {
+      setError("Could not connect to server. Make sure the backend is running.");
+    }
   }
- 
+
   return (
     <div className="wave-auth-page">
- 
-      {/* ── LEFT: form panel ── */}
       <div className="wave-form-panel">
         <div className="wave-form-inner">
           <h1 className="wave-form-title">Sign Up</h1>
- 
-          {/* Role selector */}
+
+          {/* Role selector — choose account type */}
           <div className="wave-role-selector">
             <button type="button" disabled={success}
               className={`wave-role-btn${role === "user" ? " active" : ""}`}
@@ -69,49 +93,45 @@ export default function SignUpPage() {
               </div>
             </button>
           </div>
- 
+
           <form onSubmit={submit} className="wave-form">
             <div className="wave-field">
               <label>Username</label>
               <input type="text" placeholder="e.g. sara_k" value={username} required disabled={success}
                 onChange={(e) => { setUsername(e.target.value); setError(""); }} />
             </div>
- 
+
             <div className="wave-field">
               <label>Email address</label>
               <input type="email" placeholder="yourname@email.com" value={email} required disabled={success}
                 onChange={(e) => { setEmail(e.target.value); setError(""); }} />
             </div>
- 
+
             <div className="wave-field">
               <label>Password</label>
               <input type="password" placeholder="Min. 6 characters" value={password} required disabled={success}
                 onChange={(e) => { setPassword(e.target.value); setError(""); }} />
             </div>
- 
+
             {error   && <p className="wave-error">{error}</p>}
             {success && <p className="wave-success">Account created! Redirecting…</p>}
- 
+
             <button type="submit" className="wave-btn" disabled={success}>
               {success ? <span className="wave-spinner" /> : "Create account"}
             </button>
           </form>
- 
+
           <p className="wave-switch">
             Already have an account? <Link to="/signin">Sign in</Link>
           </p>
         </div>
       </div>
- 
-      {/* ── RIGHT: illustrated panel ── */}
+
       <div className="wave-illus-panel">
         <svg className="wave-divider" viewBox="0 0 120 800" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M120,0 C60,200 0,300 60,500 C90,620 120,700 120,800 L0,800 L0,0 Z"
-            fill="white"/>
+          <path d="M120,0 C60,200 0,300 60,500 C90,620 120,700 120,800 L0,800 L0,0 Z" fill="white"/>
         </svg>
- 
         <div className="wave-illus-watermark">CERTE</div>
- 
       </div>
     </div>
   );
