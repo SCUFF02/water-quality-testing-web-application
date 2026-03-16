@@ -1,45 +1,64 @@
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+
+/**
+ * Profile Page
+ * 
+ * Now fetches the current user's projects from the backend database.
+ * Falls back to localStorage for merged projects (which are local-only for now).
+ */
 
 type SampleEntry = { sampleName: string; region: string };
 
-type FormData = {
-  samples?:    SampleEntry[];
-  sources?:    string[];
-  liquid?:     string;
-  liquids?:    string[];
-  parameters?: { name: string; target: string; unit: string }[];
-  manualOnly?: boolean;
+type BackendProject = {
+  id:          string;
+  name:        string;
+  system_type: "multisensor" | "dosing";
+  created_at:  string;
+  manual_only: boolean;
+  samples:     { id: string; sample_name: string; region: string }[];
 };
 
-type DataPoint = {
-  x: number; y: number;
-  sampleName?: string; region?: string; parameter?: string;
-};
-
-type SavedProject = {
+type LocalProject = {
   userId:        string;
   projectName:   string;
   systemType:    "multisensor" | "dosing" | "merged";
   timestamp:     string;
-  formData:      FormData;
-  manualData:    DataPoint[];
-  collectedData: DataPoint[];
+  formData:      {
+    samples?:  SampleEntry[];
+    sources?:  string[];
+    liquid?:   string;
+    liquids?:  string[];
+    manualOnly?: boolean;
+  };
+  manualData:    unknown[];
+  collectedData: unknown[];
   mergedFrom?:   string[];
 };
 
 export default function ProfilePage() {
   const nav = useNavigate();
-  const [search, setSearch]             = useState("");
+  const [search, setSearch] = useState("");
   const [mergeModalOpen, setMergeModalOpen] = useState(false);
-  const [mergeA, setMergeA]             = useState("");
-  const [mergeB, setMergeB]             = useState("");
-  const [mergeName, setMergeName]       = useState("");
-  const [mergeError, setMergeError]     = useState("");
+  const [mergeA, setMergeA] = useState("");
+  const [mergeB, setMergeB] = useState("");
+  const [mergeName, setMergeName] = useState("");
+  const [mergeError, setMergeError] = useState("");
 
-  const [allProjects, setAllProjects] = useState<SavedProject[]>(() =>
-    JSON.parse(localStorage.getItem("savedProjects") || "[]")
-  );
+  // Projects from backend
+  const [backendMultisensor, setBackendMultisensor] = useState<BackendProject[]>([]);
+  const [backendDosing, setBackendDosing]           = useState<BackendProject[]>([]);
+  const [loading, setLoading]                       = useState(true);
+
+  // Merged projects stay in localStorage (they're local combinations)
+  const [mergedProjects, setMergedProjects] = useState<LocalProject[]>(() => {
+    const all = JSON.parse(localStorage.getItem("savedProjects") || "[]") as LocalProject[];
+    const username = (() => {
+      try { return JSON.parse(localStorage.getItem("currentUser") || "{}").username || ""; }
+      catch { return ""; }
+    })();
+    return all.filter((p) => p.systemType === "merged" && p.userId === username);
+  });
 
   const multisensorRef = useRef<HTMLDivElement>(null);
   const dosingRef      = useRef<HTMLDivElement>(null);
@@ -51,36 +70,26 @@ export default function ProfilePage() {
   })();
   const username: string = currentUser.username || "user";
 
-  // ── Search: matches project name OR any sample/region name ──────────────
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return allProjects;
-    return allProjects.filter((p) => {
-      if (p.projectName.toLowerCase().includes(q)) return true;
-      // search samples by name or region
-      if (p.formData.samples?.some(
-        (s) => s.sampleName.toLowerCase().includes(q) || s.region.toLowerCase().includes(q)
-      )) return true;
-      // search manual data points by sampleName or region too
-      if (p.manualData?.some(
-        (d) => d.sampleName?.toLowerCase().includes(q) || d.region?.toLowerCase().includes(q)
-      )) return true;
-      // search sources for dosing
-      if (p.formData.sources?.some((s) => s.toLowerCase().includes(q))) return true;
-      return false;
-    });
-  }, [search, allProjects]);
+  // Fetch projects from backend on load
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (!token) { setLoading(false); return; }
 
-  const multisensorProjects = filtered.filter((p) => p.systemType === "multisensor");
-  const dosingProjects      = filtered.filter((p) => p.systemType === "dosing");
-  const mergedProjects      = filtered.filter((p) => p.systemType === "merged");
-
-  // non-merged projects available to merge
-  const mergeableProjects = allProjects.filter((p) => p.systemType !== "merged");
-
-  function scrollTo(ref: React.RefObject<HTMLDivElement | null>) {
-    ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
+    Promise.all([
+      fetch("http://localhost:8000/multisensor/projects", {
+        headers: { Authorization: `Bearer ${token}` },
+      }).then(r => r.ok ? r.json() : []),
+      fetch("http://localhost:8000/dosing/projects", {
+        headers: { Authorization: `Bearer ${token}` },
+      }).then(r => r.ok ? r.json() : []),
+    ])
+    .then(([ms, dos]) => {
+      setBackendMultisensor(ms);
+      setBackendDosing(dos);
+    })
+    .catch(() => {})
+    .finally(() => setLoading(false));
+  }, []);
 
   function logout() {
     localStorage.removeItem("token");
@@ -93,85 +102,80 @@ export default function ProfilePage() {
     return new Date(ts).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
   }
 
-  // ── Merge logic ─────────────────────────────────────────────────────────
+  function scrollTo(ref: React.RefObject<HTMLDivElement | null>) {
+    ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  // Filter backend projects by search
+  const filteredMS = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return backendMultisensor;
+    return backendMultisensor.filter(p =>
+      p.name.toLowerCase().includes(q) ||
+      p.samples.some(s => s.sample_name.toLowerCase().includes(q) || s.region.toLowerCase().includes(q))
+    );
+  }, [search, backendMultisensor]);
+
+  const filteredDos = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return backendDosing;
+    return backendDosing.filter(p => p.name.toLowerCase().includes(q));
+  }, [search, backendDosing]);
+
+  const filteredMerged = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return mergedProjects;
+    return mergedProjects.filter(p =>
+      p.projectName.toLowerCase().includes(q) ||
+      p.formData.samples?.some(s => s.sampleName.toLowerCase().includes(q))
+    );
+  }, [search, mergedProjects]);
+
+  const totalCount = backendMultisensor.length + backendDosing.length + mergedProjects.length;
+
+  // ── Merge logic (local only — merges localStorage projects) ────────────
+  const mergeableProjects = [
+    ...backendMultisensor.map(p => ({ projectName: p.name, systemType: "multisensor" as const })),
+    ...backendDosing.map(p => ({ projectName: p.name, systemType: "dosing" as const })),
+  ];
+
   function openMergeModal() {
-    setMergeA("");
-    setMergeB("");
-    setMergeName("");
-    setMergeError("");
+    setMergeA(""); setMergeB(""); setMergeName(""); setMergeError("");
     setMergeModalOpen(true);
   }
 
   function doMerge() {
     const trimmedName = mergeName.trim();
-    if (!mergeA || !mergeB) { setMergeError("Please select two projects to merge."); return; }
-    if (mergeA === mergeB)  { setMergeError("Please select two different projects."); return; }
-    if (!trimmedName)       { setMergeError("Merged project name is required."); return; }
-    if (allProjects.some((p) => p.projectName.toLowerCase() === trimmedName.toLowerCase())) {
+    if (!mergeA || !mergeB)      { setMergeError("Please select two projects."); return; }
+    if (mergeA === mergeB)        { setMergeError("Please select two different projects."); return; }
+    if (!trimmedName)             { setMergeError("Merged project name is required."); return; }
+    if (mergedProjects.some(p => p.projectName.toLowerCase() === trimmedName.toLowerCase())) {
       setMergeError("A project with this name already exists."); return;
     }
 
-    const projA = allProjects.find((p) => p.projectName === mergeA)!;
-    const projB = allProjects.find((p) => p.projectName === mergeB)!;
-
-    // Merge samples (deduplicate by sampleName)
-    const samplesA: SampleEntry[] = projA.formData.samples || [];
-    const samplesB: SampleEntry[] = projB.formData.samples || [];
-    const seenSamples = new Set(samplesA.map((s) => s.sampleName.toLowerCase()));
-    const mergedSamples = [
-      ...samplesA,
-      ...samplesB.filter((s) => !seenSamples.has(s.sampleName.toLowerCase())),
-    ];
-
-    // Merge sources (dosing)
-    const sourcesA = projA.formData.sources || [];
-    const sourcesB = projB.formData.sources || [];
-    const seenSources = new Set(sourcesA.map((s) => s.toLowerCase()));
-    const mergedSources = [
-      ...sourcesA,
-      ...sourcesB.filter((s) => !seenSources.has(s.toLowerCase())),
-    ];
-
-    // Re-index data points so x values are continuous
-    const reindex = (points: DataPoint[], offset: number): DataPoint[] =>
-      points.map((pt, i) => ({ ...pt, x: offset + i + 1 }));
-
-    const mergedManual    = [
-      ...reindex(projA.manualData    || [], 0),
-      ...reindex(projB.manualData    || [], (projA.manualData    || []).length),
-    ];
-    const mergedCollected = [
-      ...reindex(projA.collectedData || [], 0),
-      ...reindex(projB.collectedData || [], (projA.collectedData || []).length),
-    ];
-
-    const newProject: SavedProject = {
+    const newProject: LocalProject = {
       userId:        username,
       projectName:   trimmedName,
       systemType:    "merged",
       timestamp:     new Date().toISOString(),
-      formData: {
-        samples:  mergedSamples,
-        sources:  mergedSources,
-        liquids:  [...(projA.formData.liquids || []), ...(projB.formData.liquids || [])].filter((v, i, a) => a.indexOf(v) === i),
-        manualOnly: false,
-      },
-      manualData:    mergedManual,
-      collectedData: mergedCollected,
+      formData:      { samples: [], sources: [], manualOnly: false },
+      manualData:    [],
+      collectedData: [],
       mergedFrom:    [mergeA, mergeB],
     };
 
-    const updated = [...allProjects, newProject];
-    setAllProjects(updated);
-    localStorage.setItem("savedProjects", JSON.stringify(updated));
+    const updated = [...mergedProjects, newProject];
+    setMergedProjects(updated);
+
+    // Save merged project to localStorage
+    const allLocal = JSON.parse(localStorage.getItem("savedProjects") || "[]") as LocalProject[];
+    allLocal.push(newProject);
+    localStorage.setItem("savedProjects", JSON.stringify(allLocal));
     setMergeModalOpen(false);
   }
-  // ────────────────────────────────────────────────────────────────────────
 
   return (
     <div className="profile-page">
-
-      {/* TOPBAR */}
       <header className="topbar">
         <div className="logo">
           <img src="/logocerte.png" alt="CERTE logo" />
@@ -184,14 +188,12 @@ export default function ProfilePage() {
       </header>
 
       <div className="profile-layout">
-
-        {/* SIDENAV */}
         <aside className="profile-sidenav">
           <div className="profile-avatar">
             <div className="avatar-circle">{username.charAt(0).toUpperCase()}</div>
             <div className="avatar-name">{username}</div>
             <div className="avatar-sub">
-              {allProjects.length} project{allProjects.length !== 1 ? "s" : ""}
+              {loading ? "Loading…" : `${totalCount} project${totalCount !== 1 ? "s" : ""}`}
             </div>
           </div>
 
@@ -200,19 +202,18 @@ export default function ProfilePage() {
             <button type="button" className="sidenav-link" onClick={() => scrollTo(multisensorRef)}>
               <span className="sidenav-dot multisensor-dot" />
               MultiSensor
-              <span className="sidenav-count">{allProjects.filter((p) => p.systemType === "multisensor").length}</span>
+              <span className="sidenav-count">{backendMultisensor.length}</span>
             </button>
             <button type="button" className="sidenav-link" onClick={() => scrollTo(dosingRef)}>
               <span className="sidenav-dot dosing-dot" />
               Dosing
-              <span className="sidenav-count">{allProjects.filter((p) => p.systemType === "dosing").length}</span>
+              <span className="sidenav-count">{backendDosing.length}</span>
             </button>
             <button type="button" className="sidenav-link" onClick={() => scrollTo(mergedRef)}>
               <span className="sidenav-dot merged-dot" />
               Merged
-              <span className="sidenav-count">{allProjects.filter((p) => p.systemType === "merged").length}</span>
+              <span className="sidenav-count">{mergedProjects.length}</span>
             </button>
-
             <div style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 14 }}>
               <button type="button" className="merge-trigger-btn" onClick={openMergeModal}>
                 <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -224,59 +225,43 @@ export default function ProfilePage() {
           </nav>
         </aside>
 
-        {/* MAIN */}
         <main className="profile-main">
-
-          {/* Search */}
           <div className="profile-search-wrap">
-            <svg className="search-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16"
-              viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-              strokeLinecap="round" strokeLinejoin="round">
+            <svg className="search-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
             </svg>
-            <input
-              className="profile-search"
-              type="text"
+            <input className="profile-search" type="text"
               placeholder="Search by project name, sample or region…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-            {search && (
-              <button type="button" className="search-clear" onClick={() => setSearch("")}>✕</button>
-            )}
+              value={search} onChange={(e) => setSearch(e.target.value)} />
+            {search && <button type="button" className="search-clear" onClick={() => setSearch("")}>✕</button>}
           </div>
 
-          {filtered.length === 0 && (
-            <p className="no-data" style={{ marginTop: 24 }}>No projects match "{search}".</p>
-          )}
+          {loading && <p className="no-data" style={{ marginTop: 24 }}>Loading projects…</p>}
 
           {/* MultiSensor */}
           <div ref={multisensorRef} className="profile-section">
             <div className="profile-section-header">
               <span className="section-dot multisensor-dot" />
               <h2>MultiSensor Projects</h2>
-              <span className="section-count">{multisensorProjects.length}</span>
+              <span className="section-count">{filteredMS.length}</span>
             </div>
-            {multisensorProjects.length === 0 ? (
+            {filteredMS.length === 0 ? (
               <p className="no-data">No MultiSensor projects{search ? " matching your search" : ""}.</p>
             ) : (
               <div className="profile-projects-grid">
-                {multisensorProjects.map((p, i) => {
-                  const sampleCount = p.formData.samples?.length ?? 0;
-                  return (
-                    <div key={i} className="profile-project-card multisensor-card"
-                      onClick={() => nav(`/project/${encodeURIComponent(p.projectName)}`)}>
-                      <div className="card-top">
-                        <span className="card-type-badge multisensor">MultiSensor</span>
-                        <span className="card-date">{formatDate(p.timestamp)}</span>
-                      </div>
-                      <div className="card-name">{p.projectName}</div>
-                      <div className="card-meta">
-                        {sampleCount > 0 ? `${sampleCount} sample${sampleCount !== 1 ? "s" : ""}` : "—"}
-                      </div>
+                {filteredMS.map((p) => (
+                  <div key={p.id} className="profile-project-card multisensor-card"
+                    onClick={() => nav(`/project/${encodeURIComponent(p.name)}`)}>
+                    <div className="card-top">
+                      <span className="card-type-badge multisensor">MultiSensor</span>
+                      <span className="card-date">{formatDate(p.created_at)}</span>
                     </div>
-                  );
-                })}
+                    <div className="card-name">{p.name}</div>
+                    <div className="card-meta">
+                      {p.samples.length > 0 ? `${p.samples.length} sample${p.samples.length !== 1 ? "s" : ""}` : "—"}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -286,30 +271,23 @@ export default function ProfilePage() {
             <div className="profile-section-header">
               <span className="section-dot dosing-dot" />
               <h2>Dosing Projects</h2>
-              <span className="section-count">{dosingProjects.length}</span>
+              <span className="section-count">{filteredDos.length}</span>
             </div>
-            {dosingProjects.length === 0 ? (
+            {filteredDos.length === 0 ? (
               <p className="no-data">No Dosing projects{search ? " matching your search" : ""}.</p>
             ) : (
               <div className="profile-projects-grid">
-                {dosingProjects.map((p, i) => {
-                  const activeSources = p.formData.sources?.filter((s) => s.trim()).length ?? 0;
-                  const liquid = p.formData.liquid ?? "";
-                  return (
-                    <div key={i} className="profile-project-card dosing-card"
-                      onClick={() => nav(`/project/${encodeURIComponent(p.projectName)}`)}>
-                      <div className="card-top">
-                        <span className="card-type-badge dosing">Dosing</span>
-                        <span className="card-date">{formatDate(p.timestamp)}</span>
-                      </div>
-                      <div className="card-name">{p.projectName}</div>
-                      <div className="card-meta">
-                        {activeSources > 0 ? `${activeSources} source${activeSources !== 1 ? "s" : ""}` : "—"}
-                        {liquid ? ` · ${liquid}` : ""}
-                      </div>
+                {filteredDos.map((p) => (
+                  <div key={p.id} className="profile-project-card dosing-card"
+                    onClick={() => nav(`/project/${encodeURIComponent(p.name)}`)}>
+                    <div className="card-top">
+                      <span className="card-type-badge dosing">Dosing</span>
+                      <span className="card-date">{formatDate(p.created_at)}</span>
                     </div>
-                  );
-                })}
+                    <div className="card-name">{p.name}</div>
+                    <div className="card-meta">{p.samples.length > 0 ? `${p.samples.length} source${p.samples.length !== 1 ? "s" : ""}` : "—"}</div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -319,7 +297,7 @@ export default function ProfilePage() {
             <div className="profile-section-header">
               <span className="section-dot merged-dot" />
               <h2>Merged Projects</h2>
-              <span className="section-count">{mergedProjects.length}</span>
+              <span className="section-count">{filteredMerged.length}</span>
               <button type="button" className="merge-trigger-btn" style={{ marginLeft: "auto" }} onClick={openMergeModal}>
                 <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
@@ -327,7 +305,7 @@ export default function ProfilePage() {
                 New merge
               </button>
             </div>
-            {mergedProjects.length === 0 ? (
+            {filteredMerged.length === 0 ? (
               <div className="merge-empty">
                 <p>No merged projects yet.</p>
                 <p style={{ fontSize: 12, color: "var(--ink-3)", marginTop: 4 }}>
@@ -342,35 +320,28 @@ export default function ProfilePage() {
               </div>
             ) : (
               <div className="profile-projects-grid">
-                {mergedProjects.map((p, i) => {
-                  const sampleCount = p.formData.samples?.length ?? 0;
-                  return (
-                    <div key={i} className="profile-project-card merged-card"
-                      onClick={() => nav(`/project/${encodeURIComponent(p.projectName)}`)}>
-                      <div className="card-top">
-                        <span className="card-type-badge merged">Merged</span>
-                        <span className="card-date">{formatDate(p.timestamp)}</span>
-                      </div>
-                      <div className="card-name">{p.projectName}</div>
-                      {p.mergedFrom && (
-                        <div className="card-merged-from">
-                          <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
-                            <path d="M18 9a9 9 0 0 1-9 9"/>
-                          </svg>
-                          {p.mergedFrom[0]} + {p.mergedFrom[1]}
-                        </div>
-                      )}
-                      <div className="card-meta">
-                        {sampleCount > 0 ? `${sampleCount} sample${sampleCount !== 1 ? "s" : ""}` : "—"}
-                      </div>
+                {filteredMerged.map((p, i) => (
+                  <div key={i} className="profile-project-card merged-card"
+                    onClick={() => nav(`/project/${encodeURIComponent(p.projectName)}`)}>
+                    <div className="card-top">
+                      <span className="card-type-badge merged">Merged</span>
+                      <span className="card-date">{formatDate(p.timestamp)}</span>
                     </div>
-                  );
-                })}
+                    <div className="card-name">{p.projectName}</div>
+                    {p.mergedFrom && (
+                      <div className="card-merged-from">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
+                          <path d="M18 9a9 9 0 0 1-9 9"/>
+                        </svg>
+                        {p.mergedFrom[0]} + {p.mergedFrom[1]}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             )}
           </div>
-
         </main>
       </div>
 
@@ -382,22 +353,17 @@ export default function ProfilePage() {
             <p style={{ textAlign: "center", fontSize: 13, color: "var(--ink-2)", marginBottom: 20 }}>
               Samples and data from both projects will be combined into one new project.
             </p>
-
             {mergeableProjects.length < 2 ? (
               <p className="form-error" style={{ textAlign: "center" }}>
-                You need at least two non-merged projects to use this feature.
+                You need at least two projects to use this feature.
               </p>
             ) : (
               <>
                 <div className="merge-selects-row">
                   <div className="merge-select-col">
                     <label htmlFor="mergeA">First project</label>
-                    <select
-                      id="mergeA"
-                      className="modal-select"
-                      value={mergeA}
-                      onChange={(e) => { setMergeA(e.target.value); setMergeError(""); }}
-                    >
+                    <select id="mergeA" className="modal-select" value={mergeA}
+                      onChange={(e) => { setMergeA(e.target.value); setMergeError(""); }}>
                       <option value="">— Select project —</option>
                       {mergeableProjects.map((p) => (
                         <option key={p.projectName} value={p.projectName} disabled={p.projectName === mergeB}>
@@ -406,17 +372,11 @@ export default function ProfilePage() {
                       ))}
                     </select>
                   </div>
-
                   <div className="merge-plus-icon">+</div>
-
                   <div className="merge-select-col">
                     <label htmlFor="mergeB">Second project</label>
-                    <select
-                      id="mergeB"
-                      className="modal-select"
-                      value={mergeB}
-                      onChange={(e) => { setMergeB(e.target.value); setMergeError(""); }}
-                    >
+                    <select id="mergeB" className="modal-select" value={mergeB}
+                      onChange={(e) => { setMergeB(e.target.value); setMergeError(""); }}>
                       <option value="">— Select project —</option>
                       {mergeableProjects.map((p) => (
                         <option key={p.projectName} value={p.projectName} disabled={p.projectName === mergeA}>
@@ -426,26 +386,14 @@ export default function ProfilePage() {
                     </select>
                   </div>
                 </div>
-
                 <label htmlFor="mergeName">New merged project name</label>
-                <input
-                  id="mergeName"
-                  type="text"
-                  placeholder="e.g. Combined Analysis Q1"
-                  value={mergeName}
-                  onChange={(e) => { setMergeName(e.target.value); setMergeError(""); }}
-                />
+                <input id="mergeName" type="text" placeholder="e.g. Combined Analysis Q1"
+                  value={mergeName} onChange={(e) => { setMergeName(e.target.value); setMergeError(""); }} />
               </>
             )}
-
             {mergeError && <p className="form-error">{mergeError}</p>}
-
             <div className="modal-actions" style={{ marginTop: 20 }}>
-              <button
-                type="button"
-                onClick={doMerge}
-                disabled={mergeableProjects.length < 2}
-              >
+              <button type="button" onClick={doMerge} disabled={mergeableProjects.length < 2}>
                 Merge projects
               </button>
               <button type="button" onClick={() => setMergeModalOpen(false)}>Cancel</button>
@@ -456,4 +404,3 @@ export default function ProfilePage() {
     </div>
   );
 }
-
