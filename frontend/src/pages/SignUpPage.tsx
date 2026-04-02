@@ -1,17 +1,7 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
+import { api } from "../api/api";
 
-/**
- * Sign Up Page
- *
- * What happens when user clicks Create Account:
- * 1. Validates inputs locally (length, duplicates)
- * 2. Sends username, email, password, role to backend (POST /auth/register)
- * 3. Backend creates the user in the database
- * 4. Redirects to Sign In page
- *
- * Note: NO more localStorage for users — the database is now the source of truth.
- */
 export default function SignUpPage() {
   const [username, setUsername] = useState("");
   const [email,    setEmail]    = useState("");
@@ -24,38 +14,22 @@ export default function SignUpPage() {
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const trimmed = username.trim();
-
-    // Local validation before sending to server
-    if (!trimmed)           { setError("Username is required."); return; }
-    if (trimmed.length < 3) { setError("Username must be at least 3 characters."); return; }
-    if (password.length < 6){ setError("Password must be at least 6 characters."); return; }
-
+    if (!trimmed)            { setError("Username is required."); return; }
+    if (trimmed.length < 3)  { setError("Username must be at least 3 characters."); return; }
+    if (password.length < 6) { setError("Password must be at least 6 characters."); return; }
     setError("");
 
     try {
-      const res = await fetch("http://localhost:8000/auth/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username: trimmed,
-          email,
-          password,
-          role,
-        }),
-      });
-
+      const res  = await api.postPublic("/auth/register", { username: trimmed, email, password, role });
       const data = await res.json();
 
       if (!res.ok) {
-        // Backend error — e.g. "Email already registered" or "Username already taken"
         setError(data.detail || "Registration failed.");
         return;
       }
 
-      // Success — show message and redirect to login after 1.4 seconds
       setSuccess(true);
       setTimeout(() => nav("/signin", { replace: true }), 1400);
-
     } catch {
       setError("Could not connect to server. Make sure the backend is running.");
     }
@@ -67,7 +41,6 @@ export default function SignUpPage() {
         <div className="wave-form-inner">
           <h1 className="wave-form-title">Sign Up</h1>
 
-          {/* Role selector — choose account type */}
           <div className="wave-role-selector">
             <button type="button" disabled={success}
               className={`wave-role-btn${role === "user" ? " active" : ""}`}
@@ -100,13 +73,11 @@ export default function SignUpPage() {
               <input type="text" placeholder="e.g. sara_k" value={username} required disabled={success}
                 onChange={(e) => { setUsername(e.target.value); setError(""); }} />
             </div>
-
             <div className="wave-field">
               <label>Email address</label>
               <input type="email" placeholder="yourname@email.com" value={email} required disabled={success}
                 onChange={(e) => { setEmail(e.target.value); setError(""); }} />
             </div>
-
             <div className="wave-field">
               <label>Password</label>
               <input type="password" placeholder="Min. 6 characters" value={password} required disabled={success}

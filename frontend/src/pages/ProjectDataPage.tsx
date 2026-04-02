@@ -355,11 +355,13 @@ export default function ProjectDataPage() {
   const [confirmDeleteSample, setConfirmDeleteSample] = useState<string | null>(null);
 
   // ── Fetch project + readings from backend ──────────────────────────────────
+  const [loadError, setLoadError] = useState("");
+
   const loadData = useCallback(async () => {
     if (!projectId) return;
     setLoading(true);
+    setLoadError("");
     try {
-      // Try multisensor first, then dosing
       let proj: BackendProject | null = null;
       let systemType: "multisensor" | "dosing" = "multisensor";
 
@@ -369,24 +371,39 @@ export default function ProjectDataPage() {
       if (msRes.ok) {
         proj = await msRes.json();
         systemType = "multisensor";
+      } else if (msRes.status !== 404) {
+        setLoadError("Could not load project — server error.");
       } else {
         const dosRes = await fetch(`${API}/dosing/projects/${projectId}`, {
           headers: { Authorization: `Bearer ${token()}` }
         });
         if (dosRes.ok) { proj = await dosRes.json(); systemType = "dosing"; }
+        else if (dosRes.status === 404) { setNotFound(true); setLoading(false); return; }
+        else setLoadError("Could not load project — server error.");
       }
 
       if (!proj) { setNotFound(true); setLoading(false); return; }
       setProject(proj);
 
-      // Fetch readings
+      // Fetch paginated readings (up to 500 at a time)
       if (systemType === "multisensor") {
-        const rRes = await fetch(`${API}/multisensor/${projectId}/readings`, {
-          headers: { Authorization: `Bearer ${token()}` }
-        });
-        if (rRes.ok) setReadings(await rRes.json());
+        const allReadings: BackendReading[] = [];
+        let page = 1;
+        while (true) {
+          const rRes = await fetch(`${API}/multisensor/${projectId}/readings?page=${page}&per_page=500`, {
+            headers: { Authorization: `Bearer ${token()}` }
+          });
+          if (!rRes.ok) break;
+          const data = await rRes.json();
+          allReadings.push(...data.items);
+          if (allReadings.length >= data.total || data.items.length === 0) break;
+          page++;
+        }
+        setReadings(allReadings);
       }
-    } catch { setNotFound(true); }
+    } catch {
+      setLoadError("Could not connect to server. Make sure the backend is running.");
+    }
     finally { setLoading(false); }
   }, [projectId]);
 
@@ -532,6 +549,18 @@ export default function ProjectDataPage() {
     return (
       <div style={{ padding: "2rem" }}>
         <p style={{ color: "var(--ink-3)" }}>Loading project…</p>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div style={{ padding: "2rem" }}>
+        <div style={{ background: "var(--danger-subtle)", border: "1px solid var(--danger)", borderRadius: 8, padding: "16px", color: "var(--danger)", marginBottom: 16 }}>
+          {loadError}
+        </div>
+        <button type="button" onClick={() => { setLoadError(""); loadData(); }}>Retry</button>
+        <button type="button" onClick={() => nav("/app")} style={{ marginLeft: 8 }}>Back to Dashboard</button>
       </div>
     );
   }

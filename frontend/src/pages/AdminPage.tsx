@@ -20,15 +20,15 @@ type BackendProject = {
 
 type AdminView = "dashboard" | "users" | "projects";
 
-const API = "http://localhost:8000";
-
-function token() { return localStorage.getItem("token") || ""; }
+import { api, BASE_URL } from "../api/api";
 
 async function apiFetch(path: string, opts: RequestInit = {}) {
-  const res = await fetch(`${API}${path}`, {
-    ...opts,
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}`, ...(opts.headers || {}) },
-  });
+  const method = (opts.method || "GET").toUpperCase();
+  let res: Response;
+  if (method === "DELETE") res = await api.del(path);
+  else if (method === "PATCH") res = await api.patch(path, opts.body ? JSON.parse(opts.body as string) : {});
+  else if (method === "POST") res = await api.post(path, opts.body ? JSON.parse(opts.body as string) : {});
+  else res = await api.get(path);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -65,9 +65,7 @@ export default function AdminPage() {
       const nonAdmins = (allUsers as BackendUser[]).filter(u => u.role !== "admin");
       return Promise.all(
         nonAdmins.map(u =>
-          fetch(`${API}/users/${encodeURIComponent(u.username)}/projects`, {
-            headers: { Authorization: `Bearer ${token()}` }
-          }).then(r => r.ok ? r.json() : [])
+          api.get(`/users/${encodeURIComponent(u.username)}/projects`).then(r => r.ok ? r.json() : [])
           .then((projs: BackendProject[]) => projs.map(p => ({ ...p, ownerUsername: u.username })))
         )
       ).then(results => {

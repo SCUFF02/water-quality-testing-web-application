@@ -1,3 +1,4 @@
+import { api } from "../api/api";
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -72,16 +73,11 @@ export default function ProfilePage() {
 
   // Fetch projects from backend on load
   useEffect(() => {
-    const token = localStorage.getItem("token");
-    if (!token) { setLoading(false); return; }
+    if (!localStorage.getItem("token")) { setLoading(false); return; }
 
     Promise.all([
-      fetch("http://localhost:8000/multisensor/projects", {
-        headers: { Authorization: `Bearer ${token}` },
-      }).then(r => r.ok ? r.json() : []),
-      fetch("http://localhost:8000/dosing/projects", {
-        headers: { Authorization: `Bearer ${token}` },
-      }).then(r => r.ok ? r.json() : []),
+      api.get("/multisensor/projects").then(r => r.ok ? r.json() : []),
+      api.get("/dosing/projects").then(r => r.ok ? r.json() : []),
     ])
     .then(([ms, dos]) => {
       setBackendMultisensor(ms);

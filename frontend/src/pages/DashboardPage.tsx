@@ -28,6 +28,7 @@ export default function DashboardPage() {
   const [dosingOpen, setDosingOpen] = useState(false);
   const [projects,   setProjects]   = useState<BackendProject[]>([]);
   const [loading,    setLoading]    = useState(true);
+  const [error,      setError]      = useState("");
   const [history, setHistory] = useState<string[]>([]);
 
   const currentUser = (() => {
@@ -40,6 +41,7 @@ export default function DashboardPage() {
 
   const loadProjects = useCallback(async () => {
     if (!token()) { setLoading(false); return; }
+    setError("");
     try {
       const [ms, dos] = await Promise.all([
         fetch(`${API}/multisensor/projects`, { headers: { Authorization: `Bearer ${token()}` } }).then(r => r.ok ? r.json() : []),
@@ -50,7 +52,7 @@ export default function DashboardPage() {
         ...dos.map((p: BackendProject) => ({ ...p, system_type: "dosing" as const })),
       ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
       setProjects(all);
-    } catch { setProjects([]); }
+    } catch { setError("Could not load projects — make sure the backend is running."); setProjects([]); }
     finally { setLoading(false); }
   }, []);
 
@@ -81,6 +83,31 @@ export default function DashboardPage() {
       setHistory(prev => [`Deleted project "${project.name}"`, ...prev]);
     } catch {
       alert("Could not delete project — make sure the backend is running.");
+    }
+  }
+
+  async function renameProject(project: BackendProject) {
+    const newName = window.prompt("Enter new project name:", project.name);
+    if (!newName || !newName.trim() || newName.trim() === project.name) return;
+    const trimmed = newName.trim();
+    const endpoint = project.system_type === "multisensor"
+      ? `/multisensor/projects/${project.id}`
+      : `/dosing/projects/${project.id}`;
+    try {
+      const res = await fetch(`${API}${endpoint}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` },
+        body: JSON.stringify({ name: trimmed }),
+      });
+      if (!res.ok) {
+        const d = await res.json();
+        alert(d.detail || "Could not rename project.");
+        return;
+      }
+      setProjects(prev => prev.map(p => p.id === project.id ? { ...p, name: trimmed } : p));
+      setHistory(prev => [`Renamed "${project.name}" to "${trimmed}"`, ...prev]);
+    } catch {
+      alert("Could not connect to server.");
     }
   }
 
@@ -145,6 +172,13 @@ export default function DashboardPage() {
                       </span>
                     </span>
                     <div className="project-actions">
+                      <button type="button" className="icon-btn rename-btn"
+                        onClick={() => renameProject(project)} title="Rename">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                        </svg>
+                      </button>
                       <button type="button" className="icon-btn delete-btn"
                         onClick={() => deleteProject(project)} title="Delete">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -168,6 +202,11 @@ export default function DashboardPage() {
         </aside>
 
         <section className="main-panel">
+          {error && (
+            <div style={{ background: "var(--danger-subtle)", border: "1px solid var(--danger)", borderRadius: 8, padding: "12px 16px", marginBottom: 16, color: "var(--danger)", fontSize: 13 }}>
+              {error}
+            </div>
+          )}
           <div className="db-stats-row">
             <div className="db-stat-card">
               <div className="db-stat-icon db-stat-icon-blue">
@@ -239,6 +278,12 @@ export default function DashboardPage() {
                       <td className="db-table-date">{formatDate(p.created_at)}</td>
                       <td>
                         <div className="db-table-actions" onClick={e => e.stopPropagation()}>
+                          <button type="button" className="icon-btn rename-btn" onClick={() => renameProject(p)} title="Rename">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                            </svg>
+                          </button>
                           <button type="button" className="icon-btn delete-btn" onClick={() => deleteProject(p)} title="Delete">
                             <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                               <polyline points="3 6 5 6 21 6"/>
