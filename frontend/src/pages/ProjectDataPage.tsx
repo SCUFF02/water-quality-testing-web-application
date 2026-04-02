@@ -1,31 +1,31 @@
-import { useMemo, useState, useEffect, useRef } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 
+// ── Types ─────────────────────────────────────────────────────────────────────
 type DataPoint = {
-  x: number;
-  y: number;
-  sampleName?: string;
-  region?: string;
-  parameter?: string;
+  x: number; y: number;
+  sampleName?: string; region?: string; parameter?: string;
 };
 
-type SampleEntry = {
-  sampleName: string;
-  region: string;
+type SampleEntry = { id?: string; sampleName: string; region: string };
+
+type BackendProject = {
+  id: string; name: string;
+  system_type: "multisensor" | "dosing";
+  created_at: string; manual_only: boolean;
+  samples: { id: string; sample_name: string; region: string }[];
 };
 
-type SavedProject = {
-  userId: string;
-  projectName: string;
-  systemType: "multisensor" | "dosing" | "merged";
-  timestamp: string;
-  formData: Record<string, unknown>;
-  manualData: DataPoint[];
-  collectedData: DataPoint[];
+type BackendReading = {
+  id: string; parameter: string; value: number; unit: string;
+  source: string; sample_id: string | null; recorded_at: string;
 };
 
 type ModalPhase = "preloaded" | "new-sample" | "new-entry";
 type PageTab = "data" | "charts";
+
+const API = "http://localhost:8000";
+function token() { return localStorage.getItem("token") || ""; }
 
 const PARAMETERS = [
   "pH", "Turbidity (NTU)", "TDS (ppm)", "Temperature (C)",
@@ -325,121 +325,171 @@ function HeatmapChart({ samples, manualData }: { samples: SampleEntry[]; manualD
 
 // ── Main page ────────────────────────────────────────────────────────────────
 export default function ProjectDataPage() {
-  const { projectName } = useParams();
+export default function ProjectDataPage() {
+  const { projectName } = useParams(); // now this is the project UUID
   const nav = useNavigate();
-  const decodedName = decodeURIComponent(projectName || "");
+  const projectId = decodeURIComponent(projectName || "");
 
   const [activeTab, setActiveTab] = useState<PageTab>("data");
-  const [refreshKey, setRefreshKey] = useState(0);
 
-  const project = useMemo(() => {
-    const saved = JSON.parse(localStorage.getItem("savedProjects") || "[]") as SavedProject[];
-    return saved.find((item) => item.projectName === decodedName);
-  }, [decodedName, refreshKey]);
+  // Backend project data
+  const [project,    setProject]    = useState<BackendProject | null>(null);
+  const [readings,   setReadings]   = useState<BackendReading[]>([]);
+  const [loading,    setLoading]    = useState(true);
+  const [notFound,   setNotFound]   = useState(false);
 
-  const [collectedData, setCollectedData] = useState<DataPoint[]>(project?.collectedData || []);
-  const [manualData,    setManualData]    = useState<DataPoint[]>(project?.manualData    || []);
-
+  // Modal state
   const [modalOpen,  setModalOpen]  = useState(false);
-  const [modalPhase, setModalPhase] = useState<ModalPhase>("preloaded");
-
+  const [modalPhase, setModalPhase] = useState<ModalPhase>("new-sample");
   const [currentSampleIndex, setCurrentSampleIndex] = useState(0);
   const [pendingEntries,     setPendingEntries]     = useState<DataPoint[]>([]);
-  const [mParameter,         setMParameter]         = useState(PARAMETERS[0]);
-  const [mValue,             setMValue]             = useState("");
-  const [mError,             setMError]             = useState("");
-
+  const [mParameter, setMParameter] = useState(PARAMETERS[0]);
+  const [mValue,     setMValue]     = useState("");
+  const [mError,     setMError]     = useState("");
   const [newSampleName, setNewSampleName] = useState("");
   const [newRegion,     setNewRegion]     = useState("");
   const [newParam,      setNewParam]      = useState(PARAMETERS[0]);
   const [newValue,      setNewValue]      = useState("");
   const [newError,      setNewError]      = useState("");
-
-  // Chart tab: which sample is selected for radar/gauge
   const [selectedSample, setSelectedSample] = useState<string>("");
-
-  function updateProject(updated: { manualData: DataPoint[]; collectedData: DataPoint[] }) {
-    const all = JSON.parse(localStorage.getItem("savedProjects") || "[]") as SavedProject[];
-    localStorage.setItem("savedProjects",
-      JSON.stringify(all.map((item) => item.projectName === decodedName ? { ...item, ...updated } : item))
-    );
-  }
-
   const [confirmDeleteSample, setConfirmDeleteSample] = useState<string | null>(null);
 
-  function deleteSample(sampleName: string) {
-    // Remove from manualData
-    const newManual = manualData.filter((d) => d.sampleName !== sampleName);
-    setManualData(newManual);
+  // ── Fetch project + readings from backend ──────────────────────────────────
+  const loadData = useCallback(async () => {
+    if (!projectId) return;
+    setLoading(true);
+    try {
+      // Try multisensor first, then dosing
+      let proj: BackendProject | null = null;
+      let systemType: "multisensor" | "dosing" = "multisensor";
 
-    // Remove from formData.samples in localStorage
-    const all = JSON.parse(localStorage.getItem("savedProjects") || "[]") as SavedProject[];
-    const updated = all.map((item) => {
-      if (item.projectName !== decodedName) return item;
-      const samples = (item.formData.samples as SampleEntry[] | undefined) || [];
+      const msRes = await fetch(`${API}/multisensor/projects/${projectId}`, {
+        headers: { Authorization: `Bearer ${token()}` }
+      });
+      if (msRes.ok) {
+        proj = await msRes.json();
+        systemType = "multisensor";
+      } else {
+        const dosRes = await fetch(`${API}/dosing/projects/${projectId}`, {
+          headers: { Authorization: `Bearer ${token()}` }
+        });
+        if (dosRes.ok) { proj = await dosRes.json(); systemType = "dosing"; }
+      }
+
+      if (!proj) { setNotFound(true); setLoading(false); return; }
+      setProject(proj);
+
+      // Fetch readings
+      if (systemType === "multisensor") {
+        const rRes = await fetch(`${API}/multisensor/${projectId}/readings`, {
+          headers: { Authorization: `Bearer ${token()}` }
+        });
+        if (rRes.ok) setReadings(await rRes.json());
+      }
+    } catch { setNotFound(true); }
+    finally { setLoading(false); }
+  }, [projectId]);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
+  // ── Convert backend readings to DataPoints for charts ─────────────────────
+  const manualData: DataPoint[] = useMemo(() => {
+    return readings.map((r, i) => {
+      const sample = project?.samples.find(s => s.id === r.sample_id);
       return {
-        ...item,
-        formData: {
-          ...item.formData,
-          samples: samples.filter((s) => s.sampleName !== sampleName),
-        },
-        manualData: (item.manualData as DataPoint[]).filter((d) => d.sampleName !== sampleName),
+        x: i + 1,
+        y: r.value,
+        sampleName: sample?.sample_name || r.sample_id || "Unknown",
+        region:     sample?.region || "",
+        parameter:  r.parameter,
       };
     });
-    localStorage.setItem("savedProjects", JSON.stringify(updated));
+  }, [readings, project]);
 
-    // If deleted sample was selected in charts, clear selection
-    if (selectedSample === sampleName) setSelectedSample("");
-    setConfirmDeleteSample(null);
-    // Force project to re-read from localStorage
-    setRefreshKey((k) => k + 1);
+  // Samples from project
+  const multiSamples: SampleEntry[] = useMemo(() =>
+    (project?.samples || []).map(s => ({ id: s.id, sampleName: s.sample_name, region: s.region })),
+    [project]
+  );
+
+  // ── Save manual reading to backend ────────────────────────────────────────
+  async function saveReadingToBackend(entry: DataPoint) {
+    const sample = project?.samples.find(s => s.sample_name === entry.sampleName);
+    try {
+      const res = await fetch(`${API}/multisensor/${projectId}/readings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` },
+        body: JSON.stringify({
+          sample_id: sample?.id || null,
+          parameter: entry.parameter,
+          value:     entry.y,
+          unit:      PARAM_RANGES[entry.parameter || ""]?.unit?.trim() || "",
+          source:    "manual",
+        }),
+      });
+      if (res.ok) await loadData(); // refresh readings
+    } catch { console.error("Could not save reading to backend"); }
   }
 
-  function connectSystem()   { window.alert("System connected."); }
-
-  function startCollecting() {
-    const next = { x: collectedData.length + 1, y: Math.floor(Math.random() * 100) };
-    const updated = [...collectedData, next];
-    setCollectedData(updated);
-    updateProject({ collectedData: updated, manualData });
+  // ── Delete sample from backend ────────────────────────────────────────────
+  async function deleteSample(sampleName: string) {
+    const sample = project?.samples.find(s => s.sample_name === sampleName);
+    if (!sample?.id) return;
+    try {
+      await fetch(`${API}/multisensor/${projectId}/samples/${sample.id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token()}` },
+      });
+      if (selectedSample === sampleName) setSelectedSample("");
+      setConfirmDeleteSample(null);
+      await loadData();
+    } catch { alert("Could not delete sample."); }
   }
 
+  // ── Export (use backend endpoints) ───────────────────────────────────────
+  async function exportData(format: "json" | "csv") {
+    if (!project) return;
+    const endpoint = project.system_type === "multisensor"
+      ? `/exports/${projectId}/${format}`
+      : `/exports/${projectId}/${format}`;
+    const res = await fetch(`${API}${endpoint}`, {
+      headers: { Authorization: `Bearer ${token()}` }
+    });
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${project.name.replace(/ /g, "_")}.${format}`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // ── Modal handlers ────────────────────────────────────────────────────────
   function openManualModal() {
     setPendingEntries([]); setMParameter(PARAMETERS[0]); setMValue(""); setMError("");
     setNewSampleName(""); setNewRegion(""); setNewParam(PARAMETERS[0]); setNewValue(""); setNewError("");
-    // Read fresh from localStorage so we get the latest samples after any deletions
-    const freshProject = (JSON.parse(localStorage.getItem("savedProjects") || "[]") as SavedProject[])
-      .find((p) => p.projectName === decodedName);
-    const freshSamples: SampleEntry[] = Array.isArray(freshProject?.formData?.samples)
-      ? (freshProject!.formData.samples as SampleEntry[])
-      : [];
-    const isManualOnly = Boolean(freshProject?.formData?.manualOnly);
-    if (isManualOnly && freshSamples.length > 0) {
-      setCurrentSampleIndex(0);
-      setModalPhase("preloaded");
+    if (project?.manual_only && multiSamples.length > 0) {
+      setCurrentSampleIndex(0); setModalPhase("preloaded");
     } else {
-      // Not manualOnly, or all preloaded samples deleted — go straight to new sample
       setModalPhase("new-sample");
     }
     setModalOpen(true);
   }
 
-  function submitPreloadedEntry(e: React.FormEvent<HTMLFormElement>) {
+  async function submitPreloadedEntry(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (mValue.trim() === "" || isNaN(Number(mValue))) { setMError("Please enter a valid numeric value."); return; }
     const sample = multiSamples[currentSampleIndex];
-    const entry: DataPoint = {
-      x: manualData.length + pendingEntries.length + 1,
-      y: Number(mValue), sampleName: sample.sampleName, region: sample.region, parameter: mParameter,
-    };
+    const entry: DataPoint = { x: readings.length + pendingEntries.length + 1, y: Number(mValue), sampleName: sample.sampleName, region: sample.region, parameter: mParameter };
     const newPending = [...pendingEntries, entry];
     setPendingEntries(newPending);
     const isLast = currentSampleIndex >= multiSamples.length - 1;
     if (!isLast) {
       setCurrentSampleIndex(currentSampleIndex + 1); setMParameter(PARAMETERS[0]); setMValue(""); setMError("");
     } else {
-      const updated = [...manualData, ...newPending];
-      setManualData(updated); updateProject({ collectedData, manualData: updated }); setPendingEntries([]);
+      for (const e2 of newPending) await saveReadingToBackend(e2);
+      setPendingEntries([]);
       goToNewSamplePhase();
     }
   }
@@ -450,8 +500,8 @@ export default function ProjectDataPage() {
       setCurrentSampleIndex(currentSampleIndex + 1); setMParameter(PARAMETERS[0]); setMValue(""); setMError("");
     } else {
       if (pendingEntries.length > 0) {
-        const updated = [...manualData, ...pendingEntries];
-        setManualData(updated); updateProject({ collectedData, manualData: updated }); setPendingEntries([]);
+        Promise.all(pendingEntries.map(e => saveReadingToBackend(e)));
+        setPendingEntries([]);
       }
       goToNewSamplePhase();
     }
@@ -468,64 +518,35 @@ export default function ProjectDataPage() {
     setNewError(""); setModalPhase("new-entry");
   }
 
-  function submitNewEntry(e: React.FormEvent<HTMLFormElement>) {
+  async function submitNewEntry(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (newValue.trim() === "" || isNaN(Number(newValue))) { setNewError("Please enter a valid numeric value."); return; }
-    const entry: DataPoint = {
-      x: manualData.length + 1, y: Number(newValue),
-      sampleName: newSampleName.trim(), region: newRegion.trim(), parameter: newParam,
-    };
-    const updated = [...manualData, entry];
-    setManualData(updated); updateProject({ collectedData, manualData: updated });
+    const entry: DataPoint = { x: readings.length + 1, y: Number(newValue), sampleName: newSampleName.trim(), region: newRegion.trim(), parameter: newParam };
+    await saveReadingToBackend(entry);
     setNewValue(""); setNewError(""); setNewParam(PARAMETERS[0]); setNewSampleName(""); setNewRegion("");
     setModalPhase("new-sample");
   }
 
-  function exportData(format: "json" | "csv") {
-    if (!project) return;
-    const exportObject = { ...project, manualData, collectedData };
-    if (format === "json") {
-      const blob = new Blob([JSON.stringify(exportObject, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a"); a.href = url; a.download = `${decodedName}.json`; a.click();
-      URL.revokeObjectURL(url);
-    }
-    if (format === "csv") {
-      const rows = [
-        ["type", "x", "y", "sampleName", "region", "parameter"],
-        ...collectedData.map((p) => ["collected", String(p.x), String(p.y), "", "", ""]),
-        ...manualData.map((p) => ["manual", String(p.x), String(p.y), p.sampleName || "", p.region || "", p.parameter || ""]),
-      ];
-      const blob = new Blob([rows.map((r) => r.join(",")).join("\n")], { type: "text/csv" });
-      const url = URL.createObjectURL(blob); const a = document.createElement("a");
-      a.href = url; a.download = `${decodedName}.csv`; a.click(); URL.revokeObjectURL(url);
-    }
+  // ── Loading / not found states ────────────────────────────────────────────
+  if (loading) {
+    return (
+      <div style={{ padding: "2rem" }}>
+        <p style={{ color: "var(--ink-3)" }}>Loading project…</p>
+      </div>
+    );
   }
 
-  if (!project) {
+  if (notFound || !project) {
     return (
       <div style={{ padding: "2rem" }}>
         <h2>Project not found</h2>
-        <p>Check that the project was saved before opening this page.</p>
+        <p>This project may have been deleted or you don't have access to it.</p>
         <button type="button" onClick={() => nav("/app")}>Back to Dashboard</button>
       </div>
     );
   }
 
-  const fd = project.formData;
-
-  const multiSamples: SampleEntry[] = (() => {
-    if (Array.isArray(fd.samples)) return fd.samples as SampleEntry[];
-    if (fd.sampleName || fd.region) return [{ sampleName: String(fd.sampleName || "—"), region: String(fd.region || "—") }];
-    return [];
-  })();
-
-  const manualCountBySample: Record<string, number> = {};
-  for (const p of manualData) {
-    const key = p.sampleName || "Unknown";
-    manualCountBySample[key] = (manualCountBySample[key] || 0) + 1;
-  }
-
+  // ── Derived data for charts ───────────────────────────────────────────────
   const parameterGroups: Record<string, DataPoint[]> = {};
   for (const p of manualData) {
     const key = p.parameter || "Other";
@@ -534,11 +555,30 @@ export default function ProjectDataPage() {
   }
   const parameterKeys = Object.keys(parameterGroups);
 
-  const quality = collectedData.length ? collectedData[collectedData.length - 1].y : 0;
-  const collectedMaxY = Math.max(...collectedData.map((p) => p.y), 1);
+  const manualCountBySample: Record<string, number> = {};
+  for (const p of manualData) {
+    const key = p.sampleName || "Unknown";
+    manualCountBySample[key] = (manualCountBySample[key] || 0) + 1;
+  }
+
+  const allKnownSamples: SampleEntry[] = (() => {
+    const seen = new Map<string, SampleEntry>();
+    for (const s of multiSamples) seen.set(s.sampleName, s);
+    for (const p of manualData) {
+      if (p.sampleName && !seen.has(p.sampleName))
+        seen.set(p.sampleName, { sampleName: p.sampleName, region: p.region || "" });
+    }
+    return Array.from(seen.values());
+  })();
+
+  const activeSample   = selectedSample || allKnownSamples[0]?.sampleName || "";
+  const activeSampleData = manualData.filter(d => d.sampleName === activeSample);
+  const gaugeParams    = Object.keys(PARAM_RANGES).filter(p => activeSampleData.some(d => d.parameter === p));
+
+  const collectedMaxY  = 1;
 
   function scoreForSample(sampleName: string): number {
-    const points = manualData.filter((p) => p.sampleName === sampleName);
+    const points = manualData.filter(p => p.sampleName === sampleName);
     if (points.length === 0) return 0;
     let score = 100, checked = 0;
     for (const p of points) {
@@ -561,37 +601,20 @@ export default function ProjectDataPage() {
   }
 
   function qualityColor(score: number): string {
-    if (score >= 85) return "#22c55e";
+    if (score >= 85) return "#4FB1A1";
     if (score >= 70) return "#84cc16";
     if (score >= 50) return "#f59e0b";
-    if (score >  0)  return "#ef4444";
+    if (score >  0)  return "#DF6E5B";
     return "#94a3b8";
   }
 
-  const allKnownSamples: SampleEntry[] = (() => {
-    const seen = new Map<string, SampleEntry>();
-    for (const s of multiSamples) seen.set(s.sampleName, s);
-    for (const p of manualData) {
-      if (p.sampleName && !seen.has(p.sampleName))
-        seen.set(p.sampleName, { sampleName: p.sampleName, region: p.region || "" });
-    }
-    return Array.from(seen.values());
-  })();
-
   const sampleScores = allKnownSamples
-    .map((s) => ({ ...s, score: scoreForSample(s.sampleName) }))
+    .map(s => ({ ...s, score: scoreForSample(s.sampleName) }))
     .sort((a, b) => b.score - a.score);
 
-  const currentSample   = multiSamples[currentSampleIndex];
   const isLastPreloaded = currentSampleIndex >= multiSamples.length - 1;
+  const currentSample   = multiSamples[currentSampleIndex];
 
-  // Charts tab: resolve selected sample
-  const activeSample = selectedSample || allKnownSamples[0]?.sampleName || "";
-  const activeSampleData = manualData.filter((d) => d.sampleName === activeSample);
-
-  // Gauges: latest value per parameter for active sample
-  const gaugeParams = Object.keys(PARAM_RANGES).filter((p) =>
-    activeSampleData.some((d) => d.parameter === p)
   );
 
   return (
@@ -610,7 +633,7 @@ export default function ProjectDataPage() {
               nav(role === "admin" ? "/admin" : "/app");
             } catch { nav("/app"); }
           }}>← Back</button>
-          <h1 className="topbar-project-name">{decodedName}</h1>
+          <h1 className="topbar-project-name">{project.name}</h1>
         </div>
         <div className="export-actions">
           <button type="button" onClick={() => exportData("json")}>Export JSON</button>
@@ -626,14 +649,14 @@ export default function ProjectDataPage() {
 
           <div className="project-info-panel">
             <div className="system-badge">
-              {project.systemType === "dosing" ? "Dosing System" : "MultiSensor System"}
+              {project.system_type === "dosing" ? "Dosing System" : "MultiSensor System"}
             </div>
 
-            {project.systemType === "dosing" && (
+            {project.system_type === "dosing" && (
               <>
                 <div className="info-row">
                   <span className="info-label">Dosing liquid</span>
-                  <span className="info-value">{String(fd.liquid || "—")}</span>
+                  <span className="info-value">{project.samples.length > 0 ? project.samples.map(s => s.sample_name).join(", ") : "—"}</span>
                 </div>
                 <div className="info-section-title">Sources</div>
                 <ul className="info-list">
@@ -644,7 +667,7 @@ export default function ProjectDataPage() {
               </>
             )}
 
-            {project.systemType === "multisensor" && (
+            {project.system_type === "multisensor" && (
               <>
                 <div className="info-section-title">
                   {allKnownSamples.length} Sample{allKnownSamples.length !== 1 ? "s" : ""}
@@ -1018,4 +1041,3 @@ export default function ProjectDataPage() {
       )}
     </div>
   );
-}

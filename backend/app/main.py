@@ -4,7 +4,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from app.db import create_tables
-from app.routers import auth, multisensor, dosing, exports, names, users
+from app.routers import auth, multisensor, dosing, exports, users
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -25,7 +25,6 @@ app.include_router(auth.router)
 app.include_router(multisensor.router)
 app.include_router(dosing.router)
 app.include_router(exports.router)
-app.include_router(names.router)
 app.include_router(users.router)
 
 @app.on_event("startup")

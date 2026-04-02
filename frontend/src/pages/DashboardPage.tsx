@@ -1,28 +1,20 @@
 import { useNavigate } from "react-router-dom";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import MultiSensorForm from "../components/MultiSensorForm";
 import DosingSystemForm from "../components/DosingSystemForm";
 
-type SavedProject = {
-  userId:       string;
-  projectName:  string;
-  systemType:   "multisensor" | "dosing" | "merged";
-  timestamp:    string;
-  formData:     Record<string, unknown>;
-  manualData:   unknown[];
-  collectedData: unknown[];
-  mergedFrom?:  string[];
+const API = "http://localhost:8000";
+
+type BackendProject = {
+  id: string;
+  name: string;
+  system_type: "multisensor" | "dosing";
+  created_at: string;
+  manual_only: boolean;
+  samples: { id: string; sample_name: string; region: string }[];
 };
 
-function getCurrentUsername(): string {
-  try { return JSON.parse(localStorage.getItem("currentUser") || "{}").username || ""; }
-  catch { return ""; }
-}
-
-function loadMyProjects(username: string): SavedProject[] {
-  const all = JSON.parse(localStorage.getItem("savedProjects") || "[]") as SavedProject[];
-  return all.filter((p) => p.userId === username);
-}
+function token() { return localStorage.getItem("token") || ""; }
 
 function formatDate(ts: string) {
   if (!ts) return "—";
@@ -34,14 +26,9 @@ export default function DashboardPage() {
 
   const [multiOpen,  setMultiOpen]  = useState(false);
   const [dosingOpen, setDosingOpen] = useState(false);
-  const [projects,   setProjects]   = useState<SavedProject[]>(() =>
-    loadMyProjects(getCurrentUsername())
-  );
-  const [history, setHistory] = useState([
-    "Création du projet MultiSensor",
-    "Modification du projet Dosing System",
-    "Consultation des données du projet Analyse Eau",
-  ]);
+  const [projects,   setProjects]   = useState<BackendProject[]>([]);
+  const [loading,    setLoading]    = useState(true);
+  const [history, setHistory] = useState<string[]>([]);
 
   const currentUser = (() => {
     try { return JSON.parse(localStorage.getItem("currentUser") || "{}"); }
@@ -51,9 +38,28 @@ export default function DashboardPage() {
   const role: string     = currentUser.role     || "user";
   const isResearcher     = role === "researcher";
 
+  const loadProjects = useCallback(async () => {
+    if (!token()) { setLoading(false); return; }
+    try {
+      const [ms, dos] = await Promise.all([
+        fetch(`${API}/multisensor/projects`, { headers: { Authorization: `Bearer ${token()}` } }).then(r => r.ok ? r.json() : []),
+        fetch(`${API}/dosing/projects`,      { headers: { Authorization: `Bearer ${token()}` } }).then(r => r.ok ? r.json() : []),
+      ]);
+      const all: BackendProject[] = [
+        ...ms.map((p: BackendProject) => ({ ...p, system_type: "multisensor" as const })),
+        ...dos.map((p: BackendProject) => ({ ...p, system_type: "dosing" as const })),
+      ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      setProjects(all);
+    } catch { setProjects([]); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { loadProjects(); }, [loadProjects]);
+
+  // Reload after modal closes (new project was created)
   useEffect(() => {
-    setProjects(loadMyProjects(getCurrentUsername()));
-  }, [multiOpen, dosingOpen]);
+    if (!multiOpen && !dosingOpen) loadProjects();
+  }, [multiOpen, dosingOpen, loadProjects]);
 
   function logout() {
     localStorage.removeItem("token");
@@ -61,49 +67,27 @@ export default function DashboardPage() {
     nav("/signin", { replace: true });
   }
 
-  function deleteProject(projectName: string) {
-    const allGlobal = JSON.parse(localStorage.getItem("savedProjects") || "[]") as SavedProject[];
-    localStorage.setItem("savedProjects", JSON.stringify(
-      allGlobal.filter((p) => p.projectName !== projectName)
-    ));
-    setProjects((prev) => prev.filter((p) => p.projectName !== projectName));
-    setHistory((prev) => [`Suppression du projet ${projectName}`, ...prev]);
+  async function deleteProject(project: BackendProject) {
+    if (!window.confirm(`Delete "${project.name}"? This cannot be undone.`)) return;
+    const endpoint = project.system_type === "multisensor"
+      ? `/multisensor/projects/${project.id}`
+      : `/dosing/projects/${project.id}`;
+    try {
+      await fetch(`${API}${endpoint}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token()}` },
+      });
+      setProjects(prev => prev.filter(p => p.id !== project.id));
+      setHistory(prev => [`Deleted project "${project.name}"`, ...prev]);
+    } catch {
+      alert("Could not delete project — make sure the backend is running.");
+    }
   }
 
-  function renameProject(oldName: string) {
-    const newName = window.prompt("Entrer le nouveau nom du projet :", oldName);
-    if (!newName || !newName.trim() || newName.trim() === oldName) return;
-    const trimmedName = newName.trim();
-    const allGlobal = JSON.parse(localStorage.getItem("savedProjects") || "[]") as SavedProject[];
-    localStorage.setItem("savedProjects", JSON.stringify(
-      allGlobal.map((p) => p.projectName === oldName ? { ...p, projectName: trimmedName } : p)
-    ));
-    setProjects((prev) => prev.map((p) =>
-      p.projectName === oldName ? { ...p, projectName: trimmedName } : p
-    ));
-    setHistory((prev) => [`Projet renommé de "${oldName}" à "${trimmedName}"`, ...prev]);
-  }
-
-  function openMultiSensor() {
-    setMultiOpen(true);
-    setHistory((prev) => ["Ouverture du système MultiSensor", ...prev]);
-  }
-
-  function openDosingSystem() {
-    setDosingOpen(true);
-    setHistory((prev) => ["Ouverture du système Dosing System", ...prev]);
-  }
-
-  const recentProjects = [...projects].reverse().slice(0, 4);
-
-  // Stats
-  const totalSamples = projects.reduce((acc, p) => {
-    const samples = p.formData.samples as unknown[] | undefined;
-    return acc + (Array.isArray(samples) ? samples.length : 0);
-  }, 0);
-  const totalDataPoints = projects.reduce((acc, p) => acc + (p.manualData?.length || 0) + (p.collectedData?.length || 0), 0);
-  const multisensorCount = projects.filter((p) => p.systemType === "multisensor").length;
-  const dosingCount      = projects.filter((p) => p.systemType === "dosing").length;
+  const recentProjects = projects.slice(0, 4);
+  const multisensorCount = projects.filter(p => p.system_type === "multisensor").length;
+  const dosingCount      = projects.filter(p => p.system_type === "dosing").length;
+  const totalSamples     = projects.reduce((acc, p) => acc + p.samples.length, 0);
 
   return (
     <div className="dashboard-page">
@@ -126,8 +110,6 @@ export default function DashboardPage() {
       </header>
 
       <main className="dashboard-layout">
-
-        {/* ── SIDEBAR ── */}
         <aside className="user-panel">
           <div className="projects-card">
             <button type="button" className="username-btn" onClick={() => nav("/profile")}>
@@ -140,34 +122,31 @@ export default function DashboardPage() {
 
             <h2>History</h2>
             <ul className="history-list">
-              {history.slice(0, 6).map((item, index) => <li key={index}>{item}</li>)}
+              {history.length === 0
+                ? <li style={{ color: "var(--ink-3)", fontSize: 12 }}>No actions yet.</li>
+                : history.slice(0, 6).map((item, i) => <li key={i}>{item}</li>)
+              }
             </ul>
 
             <h2>Recent Projects</h2>
-            {recentProjects.length === 0 ? (
-              <p style={{ fontSize: 12, color: "var(--ink-3)", padding: "8px 0" }}>No projects yet. Create one above.</p>
+            {loading ? (
+              <p style={{ fontSize: 12, color: "var(--ink-3)", padding: "8px 0" }}>Loading…</p>
+            ) : recentProjects.length === 0 ? (
+              <p style={{ fontSize: 12, color: "var(--ink-3)", padding: "8px 0" }}>No projects yet.</p>
             ) : (
               <>
-                {recentProjects.map((project, index) => (
-                  <div className="project-item" key={index}>
+                {recentProjects.map((project) => (
+                  <div className="project-item" key={project.id}>
                     <span className="project-name" style={{ cursor: "pointer" }}
-                      onClick={() => nav(`/project/${encodeURIComponent(project.projectName)}`)}>
-                      {project.projectName}
-                      <span className={`project-type-badge ${project.systemType}`}>
-                        {project.systemType === "multisensor" ? "MultiSensor"
-                          : project.systemType === "dosing" ? "Dosing" : "Merged"}
+                      onClick={() => nav(`/project/${encodeURIComponent(project.id)}`)}>
+                      {project.name}
+                      <span className={`project-type-badge ${project.system_type}`}>
+                        {project.system_type === "multisensor" ? "MultiSensor" : "Dosing"}
                       </span>
                     </span>
                     <div className="project-actions">
-                      <button type="button" className="icon-btn rename-btn"
-                        onClick={() => renameProject(project.projectName)} title="Rename">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                        </svg>
-                      </button>
                       <button type="button" className="icon-btn delete-btn"
-                        onClick={() => deleteProject(project.projectName)} title="Delete">
+                        onClick={() => deleteProject(project)} title="Delete">
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                           <polyline points="3 6 5 6 21 6"/>
                           <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
@@ -188,170 +167,95 @@ export default function DashboardPage() {
           </div>
         </aside>
 
-        {/* ── MAIN PANEL ── */}
         <section className="main-panel">
-
-          {/* Stats row */}
           <div className="db-stats-row">
             <div className="db-stat-card">
               <div className="db-stat-icon db-stat-icon-blue">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                </svg>
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
               </div>
-              <div>
-                <div className="db-stat-value">{projects.length}</div>
-                <div className="db-stat-label">Total projects</div>
-              </div>
+              <div><div className="db-stat-value">{projects.length}</div><div className="db-stat-label">Total projects</div></div>
             </div>
             <div className="db-stat-card">
               <div className="db-stat-icon db-stat-icon-blue">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
-                </svg>
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
               </div>
-              <div>
-                <div className="db-stat-value">{multisensorCount}</div>
-                <div className="db-stat-label">MultiSensor</div>
-              </div>
+              <div><div className="db-stat-value">{multisensorCount}</div><div className="db-stat-label">MultiSensor</div></div>
             </div>
             <div className="db-stat-card">
               <div className="db-stat-icon db-stat-icon-green">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/>
-                  <path d="M12 6v6l4 2"/>
-                </svg>
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/><path d="M12 6v6l4 2"/></svg>
               </div>
-              <div>
-                <div className="db-stat-value">{dosingCount}</div>
-                <div className="db-stat-label">Dosing</div>
-              </div>
+              <div><div className="db-stat-value">{dosingCount}</div><div className="db-stat-label">Dosing</div></div>
             </div>
             <div className="db-stat-card">
               <div className="db-stat-icon db-stat-icon-blue">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="6"/>
-                  <line x1="12" y1="18" x2="12" y2="22"/><line x1="4.22" y1="4.22" x2="7.05" y2="7.05"/>
-                  <line x1="16.95" y1="16.95" x2="19.78" y2="19.78"/>
-                </svg>
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/></svg>
               </div>
-              <div>
-                <div className="db-stat-value">{totalSamples}</div>
-                <div className="db-stat-label">Total samples</div>
-              </div>
-            </div>
-            <div className="db-stat-card">
-              <div className="db-stat-icon db-stat-icon-green">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/>
-                  <line x1="6" y1="20" x2="6" y2="14"/>
-                </svg>
-              </div>
-              <div>
-                <div className="db-stat-value">{totalDataPoints}</div>
-                <div className="db-stat-label">Data points</div>
-              </div>
+              <div><div className="db-stat-value">{totalSamples}</div><div className="db-stat-label">Total samples</div></div>
             </div>
           </div>
 
-          {/* Systems */}
           <div className="systems-section">
             <div className="systems-section-header">
               <h2>Systems</h2>
               <span className="systems-section-sub">Start a new measurement project</span>
             </div>
             <div className="systems">
-              <button type="button" onClick={openMultiSensor}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
-                </svg>
+              <button type="button" onClick={() => setMultiOpen(true)}>
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
                 MultiSensor System
               </button>
-              <button type="button" onClick={openDosingSystem}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/>
-                  <path d="M12 8v4l3 3"/>
-                </svg>
+              <button type="button" onClick={() => setDosingOpen(true)}>
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/><path d="M12 8v4l3 3"/></svg>
                 Dosing System
               </button>
             </div>
           </div>
 
-          {/* All projects table */}
           <div className="db-projects-table-card">
             <div className="db-table-header">
               <h2>All projects</h2>
-              <button type="button" className="btn-ghost db-see-all" onClick={() => nav("/profile")}>
-                View in profile →
-              </button>
+              <button type="button" className="btn-ghost db-see-all" onClick={() => nav("/profile")}>View in profile →</button>
             </div>
-
-            {projects.length === 0 ? (
+            {loading ? (
+              <p className="no-data" style={{ padding: "24px 0" }}>Loading projects…</p>
+            ) : projects.length === 0 ? (
               <div className="db-empty-state">
-                <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--ink-3)", marginBottom: 10 }}>
-                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                </svg>
+                <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--ink-3)", marginBottom: 10 }}><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
                 <p>No projects yet.</p>
                 <p style={{ fontSize: 12, color: "var(--ink-3)" }}>Use the Systems buttons above to create your first project.</p>
               </div>
             ) : (
               <table className="db-table">
                 <thead>
-                  <tr>
-                    <th>Project</th>
-                    <th>Type</th>
-                    <th>Samples</th>
-                    <th>Data points</th>
-                    <th>Created</th>
-                    <th></th>
-                  </tr>
+                  <tr><th>Project</th><th>Type</th><th>Samples</th><th>Created</th><th></th></tr>
                 </thead>
                 <tbody>
-                  {[...projects].reverse().map((p, i) => {
-                    const samples = Array.isArray(p.formData.samples) ? (p.formData.samples as unknown[]).length : 0;
-                    const dataPoints = (p.manualData?.length || 0) + (p.collectedData?.length || 0);
-                    return (
-                      <tr key={i} onClick={() => nav(`/project/${encodeURIComponent(p.projectName)}`)}
-                        style={{ cursor: "pointer" }}>
-                        <td className="db-table-name">{p.projectName}</td>
-                        <td>
-                          <span className={`project-type-badge ${p.systemType}`}>
-                            {p.systemType === "multisensor" ? "MultiSensor"
-                              : p.systemType === "dosing" ? "Dosing" : "Merged"}
-                          </span>
-                        </td>
-                        <td className="db-table-num">{samples || "—"}</td>
-                        <td className="db-table-num">{dataPoints || "—"}</td>
-                        <td className="db-table-date">{formatDate(p.timestamp)}</td>
-                        <td>
-                          <div className="db-table-actions" onClick={(e) => e.stopPropagation()}>
-                            <button type="button" className="icon-btn rename-btn"
-                              onClick={() => renameProject(p.projectName)} title="Rename">
-                              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                              </svg>
-                            </button>
-                            <button type="button" className="icon-btn delete-btn"
-                              onClick={() => deleteProject(p.projectName)} title="Delete">
-                              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <polyline points="3 6 5 6 21 6"/>
-                                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                                <path d="M10 11v6"/><path d="M14 11v6"/>
-                                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-                              </svg>
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
+                  {projects.map((p) => (
+                    <tr key={p.id} onClick={() => nav(`/project/${encodeURIComponent(p.id)}`)} style={{ cursor: "pointer" }}>
+                      <td className="db-table-name">{p.name}</td>
+                      <td><span className={`project-type-badge ${p.system_type}`}>{p.system_type === "multisensor" ? "MultiSensor" : "Dosing"}</span></td>
+                      <td className="db-table-num">{p.samples.length || "—"}</td>
+                      <td className="db-table-date">{formatDate(p.created_at)}</td>
+                      <td>
+                        <div className="db-table-actions" onClick={e => e.stopPropagation()}>
+                          <button type="button" className="icon-btn delete-btn" onClick={() => deleteProject(p)} title="Delete">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="3 6 5 6 21 6"/>
+                              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                              <path d="M10 11v6"/><path d="M14 11v6"/>
+                              <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                            </svg>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             )}
           </div>
 
-          {/* Researcher banner */}
           {isResearcher && (
             <div className="researcher-banner" onClick={() => nav("/browse")}>
               <div className="researcher-banner-icon">
@@ -369,16 +273,11 @@ export default function DashboardPage() {
               </svg>
             </div>
           )}
-
         </section>
       </main>
 
-      {multiOpen && (
-        <MultiSensorForm onClose={() => setMultiOpen(false)} projects={projects.map((p) => p.projectName)} />
-      )}
-      {dosingOpen && (
-        <DosingSystemForm onClose={() => setDosingOpen(false)} projects={projects.map((p) => p.projectName)} />
-      )}
+      {multiOpen  && <MultiSensorForm  onClose={() => setMultiOpen(false)}  projects={projects.map(p => p.name)} />}
+      {dosingOpen && <DosingSystemForm onClose={() => setDosingOpen(false)} projects={projects.map(p => p.name)} />}
     </div>
   );
 }
