@@ -1,4 +1,5 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700&display=swap');
 
 /* ============================================================
    TOKENS
@@ -411,7 +412,6 @@ label {
 /* ============================================================
    AUTH — WAVE SPLIT LAYOUT (image 2 style)
 ============================================================ */
-@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700&display=swap');
 
 .wave-auth-page {
   min-height: 100vh;

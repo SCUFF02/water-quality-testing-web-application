@@ -325,7 +325,6 @@ function HeatmapChart({ samples, manualData }: { samples: SampleEntry[]; manualD
 
 // ── Main page ────────────────────────────────────────────────────────────────
 export default function ProjectDataPage() {
-export default function ProjectDataPage() {
   const { projectName } = useParams(); // now this is the project UUID
   const nav = useNavigate();
   const projectId = decodeURIComponent(projectName || "");
@@ -643,8 +642,6 @@ export default function ProjectDataPage() {
 
   const isLastPreloaded = currentSampleIndex >= multiSamples.length - 1;
   const currentSample   = multiSamples[currentSampleIndex];
-
-  );
 
   return (
     <div className="project-data-page">
@@ -1070,3 +1067,4 @@ export default function ProjectDataPage() {
       )}
     </div>
   );
+}
