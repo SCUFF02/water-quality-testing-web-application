@@ -20,15 +20,15 @@ type BackendProject = {
 
 type AdminView = "dashboard" | "users" | "projects";
 
-import { api, BASE_URL } from "../api/api";
+const API = "http://localhost:8000";
+
+function token() { return localStorage.getItem("token") || ""; }
 
 async function apiFetch(path: string, opts: RequestInit = {}) {
-  const method = (opts.method || "GET").toUpperCase();
-  let res: Response;
-  if (method === "DELETE") res = await api.del(path);
-  else if (method === "PATCH") res = await api.patch(path, opts.body ? JSON.parse(opts.body as string) : {});
-  else if (method === "POST") res = await api.post(path, opts.body ? JSON.parse(opts.body as string) : {});
-  else res = await api.get(path);
+  const res = await fetch(`${API}${path}`, {
+    ...opts,
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}`, ...(opts.headers || {}) },
+  });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -65,7 +65,9 @@ export default function AdminPage() {
       const nonAdmins = (allUsers as BackendUser[]).filter(u => u.role !== "admin");
       return Promise.all(
         nonAdmins.map(u =>
-          api.get(`/users/${encodeURIComponent(u.username)}/projects`).then(r => r.ok ? r.json() : [])
+          fetch(`${API}/users/${encodeURIComponent(u.username)}/projects`, {
+            headers: { Authorization: `Bearer ${token()}` }
+          }).then(r => r.ok ? r.json() : [])
           .then((projs: BackendProject[]) => projs.map(p => ({ ...p, ownerUsername: u.username })))
         )
       ).then(results => {
@@ -203,7 +205,7 @@ export default function AdminPage() {
                           <td style={{ color: "var(--ink-3)", fontFamily: "var(--mono)", fontSize: 12 }}>{formatDate(p.created_at)}</td>
                           <td>
                             <button type="button" className="btn-ghost admin-action-btn"
-                              onClick={() => nav(`/admin/project/${encodeURIComponent(p.name)}`)}>View</button>
+                              onClick={() => nav(`/admin/project/${encodeURIComponent(p.id)}`)}>View</button>
                           </td>
                         </tr>
                       ))}
@@ -313,7 +315,7 @@ export default function AdminPage() {
                         <td style={{ color: "var(--ink-3)", fontFamily: "var(--mono)", fontSize: 12 }}>{formatDate(p.created_at)}</td>
                         <td>
                           <div style={{ display: "flex", gap: 5 }}>
-                            <button type="button" className="btn-ghost admin-action-btn" onClick={() => nav(`/admin/project/${encodeURIComponent(p.name)}`)}>View</button>
+                            <button type="button" className="btn-ghost admin-action-btn" onClick={() => nav(`/admin/project/${encodeURIComponent(p.id)}`)}>View</button>
                           </div>
                         </td>
                       </tr>

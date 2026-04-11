@@ -77,7 +77,7 @@ export default function AppRouter() {
         {/* User + Researcher routes */}
         <Route path="/app"
           element={<UserRoute><DashboardPage /></UserRoute>} />
-        <Route path="/project/:projectName"
+        <Route path="/project/:id"
           element={<UserRoute><ProjectDataPage /></UserRoute>} />
         <Route path="/profile"
           element={<UserRoute><ProfilePage /></UserRoute>} />
@@ -93,7 +93,7 @@ export default function AppRouter() {
         {/* Admin only */}
         <Route path="/admin"
           element={<AdminRoute><AdminPage /></AdminRoute>} />
-        <Route path="/admin/project/:projectName"
+        <Route path="/admin/project/:id"
           element={<AdminRoute><ProjectDataPage /></AdminRoute>} />
 
         {/* Catch-all */}

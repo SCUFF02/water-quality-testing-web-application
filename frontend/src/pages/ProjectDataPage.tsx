@@ -325,9 +325,9 @@ function HeatmapChart({ samples, manualData }: { samples: SampleEntry[]; manualD
 
 // ── Main page ────────────────────────────────────────────────────────────────
 export default function ProjectDataPage() {
-  const { projectName } = useParams(); // now this is the project UUID
+  const { id } = useParams();
   const nav = useNavigate();
-  const projectId = decodeURIComponent(projectName || "");
+  const projectId = decodeURIComponent(id || "");
 
   const [activeTab, setActiveTab] = useState<PageTab>("data");
 
@@ -669,8 +669,8 @@ export default function ProjectDataPage() {
 
       <div className="project-layout">
         <aside className="project-sidebar">
-          <button type="button" onClick={connectSystem}>Connect to system</button>
-          <button type="button" onClick={startCollecting}>Start collecting data</button>
+          <button type="button" onClick={() => alert("Connect your ESP32 device and it will push data automatically.")}>Connect to system</button>
+          <button type="button" onClick={() => alert("ESP32 is pushing data via HTTP. Check the /multisensor/{id}/push endpoint.")}>Start collecting data</button>
           <button type="button" onClick={openManualModal}>Add manual data</button>
 
           <div className="project-info-panel">
@@ -680,14 +680,10 @@ export default function ProjectDataPage() {
 
             {project.system_type === "dosing" && (
               <>
-                <div className="info-row">
-                  <span className="info-label">Dosing liquid</span>
-                  <span className="info-value">{project.samples.length > 0 ? project.samples.map(s => s.sample_name).join(", ") : "—"}</span>
-                </div>
                 <div className="info-section-title">Sources</div>
                 <ul className="info-list">
-                  {(fd.sources as string[]).filter((s) => s.trim()).map((s, i) => (
-                    <li key={i}><span className="info-list-index">S{i + 1}</span> {s}</li>
+                  {project.samples.map((s, i) => (
+                    <li key={i}><span className="info-list-index">S{i + 1}</span> {s.sample_name}</li>
                   ))}
                 </ul>
               </>
@@ -767,16 +763,16 @@ export default function ProjectDataPage() {
             <div className="project-main">
 
               <div className="graph-card" style={{ gridColumn: "1 / -1" }}>
-                <h2>Collected data</h2>
-                {collectedData.length === 0 ? (
-                  <p className="no-data">No data yet. Click "Start collecting data".</p>
+                <h2>Device readings</h2>
+                {readings.filter(r => r.source === "device").length === 0 ? (
+                  <p className="no-data">No device readings yet. Connect your ESP32 and it will push data automatically.</p>
                 ) : (
                   <div className="bar-chart">
-                    {collectedData.map((point) => (
-                      <div key={point.x} className="bar-col">
-                        <span className="bar-label">{point.y}</span>
-                        <div className="bar" style={{ height: `${(point.y / collectedMaxY) * 100}%` }} />
-                        <span className="bar-x">{point.x}</span>
+                    {readings.filter(r => r.source === "device").map((r, i) => (
+                      <div key={r.id} className="bar-col">
+                        <span className="bar-label">{r.value}</span>
+                        <div className="bar" style={{ height: `${Math.min((r.value / 100) * 100, 100)}%` }} />
+                        <span className="bar-x">{r.parameter?.split(" ")[0] ?? i + 1}</span>
                       </div>
                     ))}
                   </div>
@@ -818,9 +814,9 @@ export default function ProjectDataPage() {
                 {allKnownSamples.length <= 1 ? (
                   <>
                     <div className="quality-bar">
-                      <div className="quality-fill" style={{ width: `${Math.min(quality, 100)}%` }} />
+                      <div className="quality-fill" style={{ width: `${Math.min(sampleScores[0]?.score ?? 0, 100)}%` }} />
                     </div>
-                    <p>Quality score: {quality}/100</p>
+                    <p>Quality score: {sampleScores[0]?.score ?? 0}/100</p>
                   </>
                 ) : (
                   <table className="quality-table">

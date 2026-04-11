@@ -1,4 +1,3 @@
-import { api } from "../api/api";
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -73,11 +72,16 @@ export default function ProfilePage() {
 
   // Fetch projects from backend on load
   useEffect(() => {
-    if (!localStorage.getItem("token")) { setLoading(false); return; }
+    const token = localStorage.getItem("token");
+    if (!token) { setLoading(false); return; }
 
     Promise.all([
-      api.get("/multisensor/projects").then(r => r.ok ? r.json() : []),
-      api.get("/dosing/projects").then(r => r.ok ? r.json() : []),
+      fetch("http://localhost:8000/multisensor/projects", {
+        headers: { Authorization: `Bearer ${token}` },
+      }).then(r => r.ok ? r.json() : []),
+      fetch("http://localhost:8000/dosing/projects", {
+        headers: { Authorization: `Bearer ${token}` },
+      }).then(r => r.ok ? r.json() : []),
     ])
     .then(([ms, dos]) => {
       setBackendMultisensor(ms);
@@ -247,7 +251,7 @@ export default function ProfilePage() {
               <div className="profile-projects-grid">
                 {filteredMS.map((p) => (
                   <div key={p.id} className="profile-project-card multisensor-card"
-                    onClick={() => nav(`/project/${encodeURIComponent(p.name)}`)}>
+                    onClick={() => nav(`/project/${encodeURIComponent(p.id)}`)}>
                     <div className="card-top">
                       <span className="card-type-badge multisensor">MultiSensor</span>
                       <span className="card-date">{formatDate(p.created_at)}</span>
@@ -275,7 +279,7 @@ export default function ProfilePage() {
               <div className="profile-projects-grid">
                 {filteredDos.map((p) => (
                   <div key={p.id} className="profile-project-card dosing-card"
-                    onClick={() => nav(`/project/${encodeURIComponent(p.name)}`)}>
+                    onClick={() => nav(`/project/${encodeURIComponent(p.id)}`)}>
                     <div className="card-top">
                       <span className="card-type-badge dosing">Dosing</span>
                       <span className="card-date">{formatDate(p.created_at)}</span>
@@ -318,7 +322,7 @@ export default function ProfilePage() {
               <div className="profile-projects-grid">
                 {filteredMerged.map((p, i) => (
                   <div key={i} className="profile-project-card merged-card"
-                    onClick={() => nav(`/project/${encodeURIComponent(p.projectName)}`)}>
+                    onClick={() => {if (!p.id) return;nav(`/project/${encodeURIComponent(p.id)}`);}}>
                     <div className="card-top">
                       <span className="card-type-badge merged">Merged</span>
                       <span className="card-date">{formatDate(p.timestamp)}</span>
