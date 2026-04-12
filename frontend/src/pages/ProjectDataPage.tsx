@@ -28,28 +28,24 @@ const API = "http://localhost:8000";
 function token() { return localStorage.getItem("token") || ""; }
 
 const PARAMETERS = [
-  "pH", "Turbidity (NTU)", "TDS (ppm)", "Temperature (C)",
-  "Conductivity", "Dissolved Oxygen", "Other",
+  "pH", "Temperature (C)", "Turbidity (NTU)", "TDS (ppm)", "Conductivity",
 ];
 
 const PARAM_COLORS: Record<string, string> = {
-  "pH":               "#2f86c7",
-  "Turbidity (NTU)":  "#8b5cf6",
-  "TDS (ppm)":        "#10b981",
-  "Temperature (C)":  "#f59e0b",
-  "Conductivity":     "#ef4444",
-  "Dissolved Oxygen": "#06b6d4",
-  "Other":            "#6366f1",
+  "pH":              "#2f86c7",
+  "Temperature (C)": "#f59e0b",
+  "Turbidity (NTU)": "#8b5cf6",
+  "TDS (ppm)":       "#10b981",
+  "Conductivity":    "#ef4444",
 };
 
 // WHO / standard safe ranges for gauge zones
 const PARAM_RANGES: Record<string, { min: number; max: number; safeMin: number; safeMax: number; unit: string }> = {
-  "pH":               { min: 0,    max: 14,   safeMin: 6.5,  safeMax: 8.5,  unit: "" },
-  "Turbidity (NTU)":  { min: 0,    max: 20,   safeMin: 0,    safeMax: 5,    unit: " NTU" },
-  "TDS (ppm)":        { min: 0,    max: 1000, safeMin: 0,    safeMax: 500,  unit: " ppm" },
-  "Temperature (C)":  { min: 0,    max: 50,   safeMin: 0,    safeMax: 35,   unit: "°C" },
-  "Conductivity":     { min: 0,    max: 2000, safeMin: 0,    safeMax: 1000, unit: " µS" },
-  "Dissolved Oxygen": { min: 0,    max: 15,   safeMin: 6,    safeMax: 15,   unit: " mg/L" },
+  "pH":              { min: 0,    max: 14,   safeMin: 6.5, safeMax: 8.5,  unit: "" },
+  "Temperature (C)": { min: 0,    max: 50,   safeMin: 10,  safeMax: 35,   unit: "°C" },
+  "Turbidity (NTU)": { min: 0,    max: 100,  safeMin: 0,   safeMax: 5,    unit: " NTU" },
+  "TDS (ppm)":       { min: 0,    max: 1000, safeMin: 0,   safeMax: 500,  unit: " ppm" },
+  "Conductivity":    { min: 0,    max: 2000, safeMin: 0,   safeMax: 1000, unit: " µS" },
 };
 
 // ── Gauge chart (SVG arc) ────────────────────────────────────────────────────
@@ -615,7 +611,7 @@ export default function ProjectDataPage() {
       else if (param === "Turbidity (NTU)") { checked++; if (p.y > 5)   score -= 25; }
       else if (param === "TDS (ppm)")   { checked++; if (p.y > 500)  score -= 25; }
       else if (param === "Temperature (C)") { checked++; if (p.y > 35)  score -= 15; }
-      else if (param === "Dissolved Oxygen") { checked++; if (p.y < 6)  score -= 20; }
+
     }
     return checked > 0 ? Math.max(0, score) : 0;
   }
@@ -669,8 +665,8 @@ export default function ProjectDataPage() {
 
       <div className="project-layout">
         <aside className="project-sidebar">
-          <button type="button" onClick={() => alert("Connect your ESP32 device and it will push data automatically.")}>Connect to system</button>
-          <button type="button" onClick={() => alert("ESP32 is pushing data via HTTP. Check the /multisensor/{id}/push endpoint.")}>Start collecting data</button>
+          <button type="button" onClick={connectSystem}>Connect to system</button>
+          <button type="button" onClick={startCollecting}>Start collecting data</button>
           <button type="button" onClick={openManualModal}>Add manual data</button>
 
           <div className="project-info-panel">
@@ -680,10 +676,14 @@ export default function ProjectDataPage() {
 
             {project.system_type === "dosing" && (
               <>
+                <div className="info-row">
+                  <span className="info-label">Dosing liquid</span>
+                  <span className="info-value">{project.samples.length > 0 ? project.samples.map(s => s.sample_name).join(", ") : "—"}</span>
+                </div>
                 <div className="info-section-title">Sources</div>
                 <ul className="info-list">
-                  {project.samples.map((s, i) => (
-                    <li key={i}><span className="info-list-index">S{i + 1}</span> {s.sample_name}</li>
+                  {(fd.sources as string[]).filter((s) => s.trim()).map((s, i) => (
+                    <li key={i}><span className="info-list-index">S{i + 1}</span> {s}</li>
                   ))}
                 </ul>
               </>
@@ -763,16 +763,16 @@ export default function ProjectDataPage() {
             <div className="project-main">
 
               <div className="graph-card" style={{ gridColumn: "1 / -1" }}>
-                <h2>Device readings</h2>
-                {readings.filter(r => r.source === "device").length === 0 ? (
-                  <p className="no-data">No device readings yet. Connect your ESP32 and it will push data automatically.</p>
+                <h2>Collected data</h2>
+                {collectedData.length === 0 ? (
+                  <p className="no-data">No data yet. Click "Start collecting data".</p>
                 ) : (
                   <div className="bar-chart">
-                    {readings.filter(r => r.source === "device").map((r, i) => (
-                      <div key={r.id} className="bar-col">
-                        <span className="bar-label">{r.value}</span>
-                        <div className="bar" style={{ height: `${Math.min((r.value / 100) * 100, 100)}%` }} />
-                        <span className="bar-x">{r.parameter?.split(" ")[0] ?? i + 1}</span>
+                    {collectedData.map((point) => (
+                      <div key={point.x} className="bar-col">
+                        <span className="bar-label">{point.y}</span>
+                        <div className="bar" style={{ height: `${(point.y / collectedMaxY) * 100}%` }} />
+                        <span className="bar-x">{point.x}</span>
                       </div>
                     ))}
                   </div>
@@ -814,9 +814,9 @@ export default function ProjectDataPage() {
                 {allKnownSamples.length <= 1 ? (
                   <>
                     <div className="quality-bar">
-                      <div className="quality-fill" style={{ width: `${Math.min(sampleScores[0]?.score ?? 0, 100)}%` }} />
+                      <div className="quality-fill" style={{ width: `${Math.min(quality, 100)}%` }} />
                     </div>
-                    <p>Quality score: {sampleScores[0]?.score ?? 0}/100</p>
+                    <p>Quality score: {quality}/100</p>
                   </>
                 ) : (
                   <table className="quality-table">
