@@ -86,6 +86,10 @@ export default function AppRouter() {
         <Route path="/browse"
           element={<ResearcherRoute><ResearcherPage /></ResearcherRoute>} />
 
+        {/* Researcher project view — read-only access to any project */}
+        <Route path="/view-project/:id"
+          element={<ResearcherRoute><ProjectDataPage /></ResearcherRoute>} />
+
         {/* Admin + Researcher */}
         <Route path="/user/:username"
           element={<PublicProfileRoute><PublicProfilePage /></PublicProfileRoute>} />

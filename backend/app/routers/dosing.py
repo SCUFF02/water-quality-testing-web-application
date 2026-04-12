@@ -34,7 +34,7 @@ def list_projects(db: Session = Depends(get_db), current_user: User = Depends(ge
 @router.get("/projects/{project_id}", response_model=ProjectOut)
 def get_project(project_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     q = db.query(Project).filter(Project.id == project_id)
-    if current_user.role != "admin":
+    if current_user.role not in ("admin", "researcher"):
         q = q.filter(Project.user_id == current_user.id)
     p = q.first()
     if not p: raise HTTPException(404, "Project not found")
@@ -103,7 +103,7 @@ def get_jobs(
 ):
     """Paginated dosing jobs. Use ?page=1&per_page=50"""
     proj_q = db.query(Project).filter(Project.id == project_id)
-    if current_user.role != "admin":
+    if current_user.role not in ("admin", "researcher"):
         proj_q = proj_q.filter(Project.user_id == current_user.id)
     if not proj_q.first():
         raise HTTPException(404, "Project not found")

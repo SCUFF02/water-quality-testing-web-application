@@ -99,9 +99,6 @@ export default function ResearcherPage() {
           return;
         }
 
-        // Use the correct route your backend allows for researchers.
-        // If /users is still admin-only in your backend, replace it with
-        // a researcher-safe route like /users/browse once you create it.
         const allUsers: BackendUser[] = await apiFetch("/users");
 
         const others = allUsers.filter(
@@ -282,76 +279,139 @@ export default function ResearcherPage() {
                   ).length;
                   const regions = getRegions(u);
 
+                  const q = search.trim().toLowerCase();
+                  const matchedProjects = q
+                    ? u.projects.filter(
+                        (p) =>
+                          p.name.toLowerCase().includes(q) ||
+                          p.samples.some(
+                            (s) =>
+                              s.sample_name.toLowerCase().includes(q) ||
+                              s.region.toLowerCase().includes(q)
+                          )
+                      )
+                    : [];
+
                   return (
-                    <div
-                      key={u.id}
-                      className="researcher-user-card"
-                      onClick={() =>
-                        nav(`/user/${encodeURIComponent(u.username)}`)
-                      }
-                    >
-                      <div className="ruc-avatar">
-                        {u.username.charAt(0).toUpperCase()}
-                      </div>
-
-                      <div className="ruc-body">
-                        <div className="ruc-username">{u.username}</div>
-
-                        <div className="ruc-role-row">
-                          <span
-                            className={`role-chip ${
-                              u.role === "researcher"
-                                ? "researcher-chip"
-                                : "user-chip"
-                            }`}
-                          >
-                            {u.role === "researcher" ? "Researcher" : "User"}
-                          </span>
+                    <div key={u.id} className="researcher-user-block">
+                      <div
+                        className="researcher-user-card"
+                        onClick={() =>
+                          nav(`/user/${encodeURIComponent(u.username)}`)
+                        }
+                      >
+                        <div className="ruc-avatar">
+                          {u.username.charAt(0).toUpperCase()}
                         </div>
 
-                        {u.projects.length > 0 ? (
-                          <div className="ruc-project-counts">
-                            {ms > 0 && (
-                              <span className="project-type-badge multisensor">
-                                {ms} MultiSensor
-                              </span>
-                            )}
-                            {dos > 0 && (
-                              <span className="project-type-badge dosing">
-                                {dos} Dosing
-                              </span>
-                            )}
-                          </div>
-                        ) : (
-                          <p className="ruc-no-projects">No projects yet</p>
-                        )}
+                        <div className="ruc-body">
+                          <div className="ruc-top">
+                            <div className="ruc-username">{u.username}</div>
 
-                        {regions.length > 0 && (
-                          <div className="ruc-regions">
-                            {regions.map((r, i) => (
-                              <span key={i} className="ruc-region-tag">
-                                {r}
+                            <div className="ruc-role-row">
+                              <span
+                                className={`role-chip ${
+                                  u.role === "researcher"
+                                    ? "researcher-chip"
+                                    : "user-chip"
+                                }`}
+                              >
+                                {u.role === "researcher" ? "Researcher" : "User"}
                               </span>
-                            ))}
+                            </div>
                           </div>
-                        )}
+
+                          <div className="ruc-content-bottom">
+                            {u.projects.length > 0 ? (
+                              <div className="ruc-project-counts">
+                                {ms > 0 && (
+                                  <span className="project-type-badge multisensor">
+                                    {ms} MultiSensor
+                                  </span>
+                                )}
+                                {dos > 0 && (
+                                  <span className="project-type-badge dosing">
+                                    {dos} Dosing
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <p className="ruc-no-projects">No projects yet</p>
+                            )}
+
+                            <div className="ruc-regions">
+                              {regions.length > 0 ? (
+                                regions.map((r, i) => (
+                                  <span key={i} className="ruc-region-tag">
+                                    {r}
+                                  </span>
+                                ))
+                              ) : (
+                                <span className="ruc-region-placeholder">No regions</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <svg
+                          className="ruc-arrow"
+                          xmlns="http://www.w3.org/2000/svg"
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <line x1="5" y1="12" x2="19" y2="12" />
+                          <polyline points="12 5 19 12 12 19" />
+                        </svg>
                       </div>
 
-                      <svg
-                        className="ruc-arrow"
-                        xmlns="http://www.w3.org/2000/svg"
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <line x1="5" y1="12" x2="19" y2="12" />
-                        <polyline points="12 5 19 12 12 19" />
-                      </svg>
+                      {matchedProjects.length > 0 && (
+                        <div className="matched-projects-list">
+                          {matchedProjects.map((p) => (
+                            <div
+                              key={p.id}
+                              className="matched-project-card"
+                              onClick={() =>
+                                nav(`/view-project/${encodeURIComponent(p.id)}`)
+                              }
+                            >
+                              <span className={`project-type-badge ${p.system_type}`}>
+                                {p.system_type === "multisensor"
+                                  ? "MultiSensor"
+                                  : "Dosing"}
+                              </span>
+
+                              <span className="matched-project-name">{p.name}</span>
+
+                              <span className="matched-project-meta">
+                                {p.samples.length} sample
+                                {p.samples.length !== 1 ? "s" : ""}
+                              </span>
+
+                              <svg
+                                className="matched-project-arrow"
+                                xmlns="http://www.w3.org/2000/svg"
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              >
+                                <line x1="5" y1="12" x2="19" y2="12" />
+                                <polyline points="12 5 19 12 12 19" />
+                              </svg>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
