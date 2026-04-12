@@ -349,6 +349,23 @@ export default function ProjectDataPage() {
   const [selectedSample, setSelectedSample] = useState<string>("");
   const [confirmDeleteSample, setConfirmDeleteSample] = useState<string | null>(null);
 
+  // ── Anomaly detection ─────────────────────────────────────────────────────
+  type AnomalyMsg = { severity: "critical" | "warning" | "info"; parameter: string; sample: string; message: string };
+  const [anomalies,     setAnomalies]     = useState<AnomalyMsg[]>([]);
+  const [anomalyLoading,setAnomalyLoading]= useState(false);
+
+  useEffect(() => {
+    if (!projectId || !project) return;
+    setAnomalyLoading(true);
+    fetch(`${API}/anomaly/${projectId}`, {
+      headers: { Authorization: `Bearer ${token()}` }
+    })
+    .then(r => r.ok ? r.json() : [])
+    .then(setAnomalies)
+    .catch(() => {})
+    .finally(() => setAnomalyLoading(false));
+  }, [projectId, readings]);
+
   // ── Fetch project + readings from backend ──────────────────────────────────
   const [loadError, setLoadError] = useState("");
 
@@ -727,6 +744,36 @@ export default function ProjectDataPage() {
                   })}
                 </ul>
               </>
+            )}
+          </div>
+
+          {/* ── ANOMALY DETECTION PANEL ── */}
+          <div className="anomaly-panel">
+            <div className="anomaly-panel-header">
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+              </svg>
+              Anomaly detection
+            </div>
+            {anomalyLoading ? (
+              <p className="anomaly-loading">Analysing…</p>
+            ) : anomalies.length === 0 ? (
+              <p className="anomaly-ok">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
+                All readings within normal range
+              </p>
+            ) : (
+              <ul className="anomaly-list">
+                {anomalies.map((a, i) => (
+                  <li key={i} className={`anomaly-item anomaly-${a.severity}`}>
+                    <span className="anomaly-dot" />
+                    <span className="anomaly-text">{a.message}</span>
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
         </aside>
