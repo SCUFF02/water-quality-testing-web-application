@@ -320,6 +320,8 @@ function HeatmapChart({ samples, manualData }: { samples: SampleEntry[]; manualD
 }
 
 // ── Main page ────────────────────────────────────────────────────────────────
+type AnomalyMsg = { severity: "critical" | "warning" | "info"; parameter: string; sample: string; message: string };
+
 export default function ProjectDataPage() {
   const { id } = useParams();
   const nav = useNavigate();
@@ -350,7 +352,6 @@ export default function ProjectDataPage() {
   const [confirmDeleteSample, setConfirmDeleteSample] = useState<string | null>(null);
 
   // ── Anomaly detection ─────────────────────────────────────────────────────
-  type AnomalyMsg = { severity: "critical" | "warning" | "info"; parameter: string; sample: string; message: string };
   const [anomalies,     setAnomalies]     = useState<AnomalyMsg[]>([]);
   const [anomalyLoading,setAnomalyLoading]= useState(false);
 

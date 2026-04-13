@@ -1,12 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
 from app.db import get_db
 from app.models import Project, SensorReading, Sample, User
 from app.auth import get_current_user
-import sys, os
-sys.path.insert(0, os.path.dirname(__file__))
-from app.anomaly import detect_anomalies
+from app.anomaly_detector import detect_anomalies
 
 router = APIRouter(prefix="/anomaly", tags=["anomaly"])
 
@@ -35,8 +32,8 @@ def get_anomalies(
     if not readings:
         return []
 
-    # Build sample name lookup
-    samples = {s.id: s for s in db.query(Sample).filter(Sample.project_id == project_id).all()}
+    samples = {s.id: s for s in db.query(Sample).filter(
+        Sample.project_id == project_id).all()}
 
     data = []
     for r in readings:
