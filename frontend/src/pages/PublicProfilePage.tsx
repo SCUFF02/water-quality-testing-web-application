@@ -134,9 +134,12 @@ export default function PublicProfilePage() {
                 <span className="section-count">{multisensorProjects.length}</span>
               </div>
               <div className="profile-projects-grid">
-                {multisensorProjects.map(p => (
-                  onClick={() => nav(`/view-project/${encodeURIComponent(p.id)}`)}
-                  <div key={p.id} className="profile-project-card multisensor-card public-card">
+               {multisensorProjects.map(p => (
+                  <div
+                   key={p.id}
+                   className="profile-project-card multisensor-card public-card"
+                   onClick={() => nav(`/view-project/${encodeURIComponent(p.id)}`)}
+                   >
                     <div className="card-top">
                       <span className="card-type-badge multisensor">MultiSensor</span>
                       <span className="card-date">{formatDate(p.created_at)}</span>
@@ -166,8 +169,8 @@ export default function PublicProfilePage() {
               </div>
               <div className="profile-projects-grid">
                 {dosingProjects.map(p => (
-                  onClick={() => nav(`/view-project/${encodeURIComponent(p.id)}`)}
-                  <div key={p.id} className="profile-project-card dosing-card public-card">
+                  <div key={p.id} className="profile-project-card dosing-card public-card"
+                    onClick={() => nav(`/view-project/${encodeURIComponent(p.id)}`)}>
                     <div className="card-top">
                       <span className="card-type-badge dosing">Dosing</span>
                       <span className="card-date">{formatDate(p.created_at)}</span>

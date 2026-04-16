@@ -617,7 +617,6 @@ export default function ProjectDataPage() {
   const activeSampleData = manualData.filter(d => d.sampleName === activeSample);
   const gaugeParams    = Object.keys(PARAM_RANGES).filter(p => activeSampleData.some(d => d.parameter === p));
 
-  const collectedMaxY  = 1;
 
   function scoreForSample(sampleName: string): number {
     const points = manualData.filter(p => p.sampleName === sampleName);
@@ -683,8 +682,8 @@ export default function ProjectDataPage() {
 
       <div className="project-layout">
         <aside className="project-sidebar">
-          <button type="button" onClick={connectSystem}>Connect to system</button>
-          <button type="button" onClick={startCollecting}>Start collecting data</button>
+          <button type="button" onClick={() => alert("Connect your ESP32 — it pushes data to /multisensor/{id}/push automatically.")}>Connect to system</button>
+          <button type="button" onClick={() => alert("ESP32 pushes data automatically via HTTP.")}>Start collecting data</button>
           <button type="button" onClick={openManualModal}>Add manual data</button>
 
           <div className="project-info-panel">
@@ -700,8 +699,8 @@ export default function ProjectDataPage() {
                 </div>
                 <div className="info-section-title">Sources</div>
                 <ul className="info-list">
-                  {(fd.sources as string[]).filter((s) => s.trim()).map((s, i) => (
-                    <li key={i}><span className="info-list-index">S{i + 1}</span> {s}</li>
+                  {project.samples.map((s, i) => (
+                    <li key={i}><span className="info-list-index">S{i + 1}</span> {s.sample_name}</li>
                   ))}
                 </ul>
               </>
@@ -811,16 +810,16 @@ export default function ProjectDataPage() {
             <div className="project-main">
 
               <div className="graph-card" style={{ gridColumn: "1 / -1" }}>
-                <h2>Collected data</h2>
-                {collectedData.length === 0 ? (
-                  <p className="no-data">No data yet. Click "Start collecting data".</p>
+                <h2>Device readings</h2>
+                {readings.filter(r => r.source === "device").length === 0 ? (
+                  <p className="no-data">No device readings yet. Connect your ESP32 and it will push data automatically.</p>
                 ) : (
                   <div className="bar-chart">
-                    {collectedData.map((point) => (
-                      <div key={point.x} className="bar-col">
-                        <span className="bar-label">{point.y}</span>
-                        <div className="bar" style={{ height: `${(point.y / collectedMaxY) * 100}%` }} />
-                        <span className="bar-x">{point.x}</span>
+                    {readings.filter(r => r.source === "device").map((r, ri) => (
+                      <div key={r.id} className="bar-col">
+                        <span className="bar-label">{r.value}</span>
+                        <div className="bar" style={{ height: `${Math.min((r.value / 100) * 100, 100)}%` }} />
+                        <span className="bar-x">{r.parameter?.split(" ")[0] ?? ri + 1}</span>
                       </div>
                     ))}
                   </div>
@@ -862,9 +861,9 @@ export default function ProjectDataPage() {
                 {allKnownSamples.length <= 1 ? (
                   <>
                     <div className="quality-bar">
-                      <div className="quality-fill" style={{ width: `${Math.min(quality, 100)}%` }} />
+                      <div className="quality-fill" style={{ width: `${Math.min(sampleScores[0]?.score ?? 0, 100)}%` }} />
                     </div>
-                    <p>Quality score: {quality}/100</p>
+                    <p>Quality score: {sampleScores[0]?.score ?? 0}/100</p>
                   </>
                 ) : (
                   <table className="quality-table">
