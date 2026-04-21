@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from "react";
 import MultiSensorForm from "../components/MultiSensorForm";
 import DosingSystemForm from "../components/DosingSystemForm";
 
-const API = "http://localhost:8000";
+import { BASE_URL as API } from "../api/api";
 
 type BackendProject = {
   id: string;

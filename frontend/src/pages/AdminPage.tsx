@@ -57,7 +57,7 @@ export default function AdminPage() {
       apiFetch("/multisensor/projects").catch(() => []),
       apiFetch("/dosing/projects").catch(() => []),
     ])
-    .then(([allUsers, ms, dos]) => {
+    .then(([allUsers]) => {
       setUsers(allUsers);
       // We need ALL users' projects — fetch per user
       // For now combine ms + dos (these return only current user's projects)

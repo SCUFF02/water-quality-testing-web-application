@@ -30,6 +30,13 @@ function isLoggedIn(): boolean {
   return !!localStorage.getItem("token");
 }
 
+// Any logged-in user (user, researcher, admin)
+function AuthRoute({ children }: { children: React.ReactNode }) {
+  if (!isLoggedIn()) return <Navigate to="/signin" replace />;
+  return <>{children}</>;
+}
+
+// Users and researchers only (not admin)
 function UserRoute({ children }: { children: React.ReactNode }) {
   if (!isLoggedIn())            return <Navigate to="/signin" replace />;
   if (getRole() === "admin")    return <Navigate to="/admin"  replace />;
@@ -80,15 +87,15 @@ export default function AppRouter() {
         <Route path="/project/:id"
           element={<UserRoute><ProjectDataPage /></UserRoute>} />
         <Route path="/profile"
-          element={<UserRoute><ProfilePage /></UserRoute>} />
+          element={<AuthRoute><ProfilePage /></AuthRoute>} />
 
         {/* Researcher only */}
         <Route path="/browse"
           element={<ResearcherRoute><ResearcherPage /></ResearcherRoute>} />
 
-        {/* Researcher project view — read-only access to any project */}
+        {/* View project — read-only access for researcher and admin */}
         <Route path="/view-project/:id"
-          element={<ResearcherRoute><ProjectDataPage /></ResearcherRoute>} />
+          element={<PublicProfileRoute><ProjectDataPage /></PublicProfileRoute>} />
 
         {/* Admin + Researcher */}
         <Route path="/user/:username"

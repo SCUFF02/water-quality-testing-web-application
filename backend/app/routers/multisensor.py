@@ -111,3 +111,49 @@ def delete_sample(project_id: str, sample_id: str, db: Session = Depends(get_db)
     if not sample: raise HTTPException(404, "Sample not found")
     db.delete(sample); db.commit()
     return {"deleted": sample_id}
+
+# ── Project status endpoints (ESP32 polls these) ──────────────────────────────
+
+@router.get("/{project_id}/status")
+def get_status(project_id: str, x_api_key: str = Header(...), db: Session = Depends(get_db)):
+    """
+    ESP32 polls this every 5 seconds.
+    Returns {"status": "active"} or {"status": "idle"}.
+    No JWT — uses device API key.
+    """
+    if x_api_key != settings.DEVICE_API_KEY:
+        raise HTTPException(403, "Invalid device API key")
+    p = db.query(Project).filter(Project.id == project_id).first()
+    if not p:
+        raise HTTPException(404, "Project not found")
+    return {"status": p.status}
+
+
+@router.post("/{project_id}/start")
+def start_project(project_id: str, db: Session = Depends(get_db),
+                  current_user: User = Depends(get_current_user)):
+    """User clicks Start — sets project status to active."""
+    q = db.query(Project).filter(Project.id == project_id)
+    if current_user.role not in ("admin", "researcher"):
+        q = q.filter(Project.user_id == current_user.id)
+    p = q.first()
+    if not p:
+        raise HTTPException(404, "Project not found")
+    p.status = "active"
+    db.commit()
+    return {"status": "active"}
+
+
+@router.post("/{project_id}/stop")
+def stop_project(project_id: str, db: Session = Depends(get_db),
+                 current_user: User = Depends(get_current_user)):
+    """User clicks Stop — sets project status to idle."""
+    q = db.query(Project).filter(Project.id == project_id)
+    if current_user.role not in ("admin", "researcher"):
+        q = q.filter(Project.user_id == current_user.id)
+    p = q.first()
+    if not p:
+        raise HTTPException(404, "Project not found")
+    p.status = "idle"
+    db.commit()
+    return {"status": "idle"}

@@ -22,33 +22,13 @@ type UserWithProjects = BackendUser & {
   projects: BackendProject[];
 };
 
-const API = "http://localhost:8000";
+import { api } from "../api/api";
 
-function token() {
-  return localStorage.getItem("token") || "";
-}
-
-async function apiFetch(path: string, opts: RequestInit = {}) {
-  const res = await fetch(`${API}${path}`, {
-    ...opts,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token()}`,
-      ...(opts.headers || {}),
-    },
-  });
-
+async function apiFetch(path: string) {
+  const res = await api.get(path);
   const text = await res.text();
-
-  if (!res.ok) {
-    throw new Error(text || `Request failed with status ${res.status}`);
-  }
-
-  try {
-    return text ? JSON.parse(text) : null;
-  } catch {
-    return text;
-  }
+  if (!res.ok) throw new Error(text || `Request failed with status ${res.status}`);
+  try { return text ? JSON.parse(text) : null; } catch { return text; }
 }
 
 function parseErrorMessage(err: unknown): string {
@@ -93,7 +73,7 @@ export default function ResearcherPage() {
         setLoading(true);
         setError("");
 
-        if (!token()) {
+        if (!localStorage.getItem("token")) {
           setError("You are not logged in. Please sign in again.");
           setUsers([]);
           return;

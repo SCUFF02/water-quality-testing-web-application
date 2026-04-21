@@ -126,7 +126,7 @@ function GaugeChart({ param, value }: { param: string; value: number }) {
 }
 
 // ── Radar chart (SVG polygon) ────────────────────────────────────────────────
-function RadarChart({ sampleName, data }: { sampleName: string; data: DataPoint[] }) {
+function RadarChart({ data }: { sampleName: string; data: DataPoint[] }) {
   const params = Object.keys(PARAM_RANGES);
   const n = params.length;
   const cx = 120, cy = 120, r = 90;
@@ -196,7 +196,7 @@ function RadarChart({ sampleName, data }: { sampleName: string; data: DataPoint[
 }
 
 // ── Line chart (SVG polyline) ────────────────────────────────────────────────
-function LineChart({ points, color, label }: { points: DataPoint[]; color: string; label: string }) {
+function LineChart({ points, color }: { points: DataPoint[]; color: string; label: string }) {
   if (points.length === 0) return <p className="no-data">No data.</p>;
   const W = 400, H = 120, PAD = { top: 16, right: 16, bottom: 24, left: 36 };
   const innerW = W - PAD.left - PAD.right;
@@ -682,7 +682,7 @@ export default function ProjectDataPage() {
 
       <div className="project-layout">
         <aside className="project-sidebar">
-          <button type="button" onClick={() => alert("Connect your ESP32 — it pushes data to /multisensor/{id}/push automatically.")}>Connect to system</button>
+          <button type="button" onClick={() => alert("Connect your ESP32 — it will push data to /multisensor/{id}/push automatically.")}>Connect to system</button>
           <button type="button" onClick={() => alert("ESP32 pushes data automatically via HTTP.")}>Start collecting data</button>
           <button type="button" onClick={openManualModal}>Add manual data</button>
 

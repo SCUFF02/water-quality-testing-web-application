@@ -1,8 +1,8 @@
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
-    DATABASE_URL:                str = "mysql+pymysql://root:@localhost:3306/waterlab"
-    SECRET_KEY:                  str = "change-me-run-python-secrets-token-hex-32"
+    DATABASE_URL:                str = "mysql+pymysql://root:https://ladven-certe.tn/esp32"
+    SECRET_KEY:                  str = "3214a5377cab768ab8fdef4077bd7506c3e527c5900cc0ecff82c1acf525baad"
     ALGORITHM:                   str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
 
