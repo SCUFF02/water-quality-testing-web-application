@@ -1,13 +1,12 @@
+import { api } from "../api/api";
 import { useMemo, useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 type BackendProject = {
-  id: string; name: string; system_type: "multisensor" | "dosing";
+  id: string; name: string; system_type: "multisensor" | "dosing" | "merged";
   created_at: string; manual_only: boolean;
   samples: { id: string; sample_name: string; region: string }[];
 };
-
-const API = "http://localhost:8000";
 
 export default function PublicProfilePage() {
   const { username } = useParams<{ username: string }>();
@@ -26,11 +25,8 @@ export default function PublicProfilePage() {
   const backLabel = role === "admin" ? "← Admin" : "← Browse";
 
   useEffect(() => {
-    const t = localStorage.getItem("token");
-    if (!t || !decoded) return;
-    fetch(`${API}/users/${encodeURIComponent(decoded)}/projects`, {
-      headers: { Authorization: `Bearer ${t}` }
-    })
+    if (!localStorage.getItem("token") || !decoded) return;
+    api.get(`/users/${encodeURIComponent(decoded)}/projects`)
     .then(r => r.ok ? r.json() : [])
     .then(setProjects)
     .catch(() => {})
@@ -48,6 +44,7 @@ export default function PublicProfilePage() {
 
   const multisensorProjects = filtered.filter(p => p.system_type === "multisensor");
   const dosingProjects      = filtered.filter(p => p.system_type === "dosing");
+  const mergedProjects      = filtered.filter(p => p.system_type === "merged");
 
   const allRegions = useMemo(() => {
     const s = new Set<string>();
@@ -68,12 +65,15 @@ export default function PublicProfilePage() {
   return (
     <div className="profile-page">
       <header className="topbar">
-        <div className="logo">
-          <img src="/logocerte.png" alt="CERTE logo" />
-          <strong>CERTE</strong>
+        <div className="topbar-left">
+          <div className="logo" style={{ cursor: "pointer" }} onClick={() => nav("/app")}>
+            <img src="/logocerte.png" alt="CERTE logo" />
+            <strong>CERTE</strong>
+          </div>
+          <button type="button" className="back-btn" onClick={() => nav(backPath)}>{backLabel}</button>
+          <span className="topbar-project-name">{decoded}</span>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <button type="button" className="back-btn" onClick={() => nav(backPath)}>{backLabel}</button>
           <button className="logout-btn" type="button" onClick={logout}>Logout</button>
         </div>
       </header>
@@ -177,6 +177,28 @@ export default function PublicProfilePage() {
                     </div>
                     <div className="card-name">{p.name}</div>
                     <div className="card-meta">{p.samples.length > 0 ? `${p.samples.length} source${p.samples.length !== 1 ? "s" : ""}` : "—"}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {mergedProjects.length > 0 && (
+            <div className="profile-section">
+              <div className="profile-section-header">
+                <span className="section-dot merged-dot" />
+                <h2>Merged Projects</h2>
+                <span className="section-count">{mergedProjects.length}</span>
+              </div>
+              <div className="profile-projects-grid">
+                {mergedProjects.map(p => (
+                  <div key={p.id} className="profile-project-card merged-card public-card"
+                    onClick={() => nav(`/merged-project/${encodeURIComponent(p.id)}`)}>
+                    <div className="card-top">
+                      <span className="card-type-badge merged">Merged</span>
+                      <span className="card-date">{formatDate(p.created_at)}</span>
+                    </div>
+                    <div className="card-name">{p.name}</div>
                   </div>
                 ))}
               </div>

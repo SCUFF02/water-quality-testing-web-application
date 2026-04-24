@@ -14,6 +14,16 @@ type BackendProject = {
   samples: { id: string; sample_name: string; region: string }[];
 };
 
+type MergedProject = {
+  id: string;
+  name: string;
+  project_a_id: string;
+  project_b_id: string;
+  project_a: { samples: unknown[] } | null;
+  project_b: { samples: unknown[] } | null;
+  created_at: string;
+};
+
 function token() { return localStorage.getItem("token") || ""; }
 
 function formatDate(ts: string) {
@@ -27,6 +37,7 @@ export default function DashboardPage() {
   const [multiOpen,  setMultiOpen]  = useState(false);
   const [dosingOpen, setDosingOpen] = useState(false);
   const [projects,   setProjects]   = useState<BackendProject[]>([]);
+  const [merged,     setMerged]     = useState<MergedProject[]>([]);
   const [loading,    setLoading]    = useState(true);
   const [error,      setError]      = useState("");
   const [history, setHistory] = useState<string[]>([]);
@@ -43,15 +54,17 @@ export default function DashboardPage() {
     if (!token()) { setLoading(false); return; }
     setError("");
     try {
-      const [ms, dos] = await Promise.all([
+      const [ms, dos, mrg] = await Promise.all([
         fetch(`${API}/multisensor/projects`, { headers: { Authorization: `Bearer ${token()}` } }).then(r => r.ok ? r.json() : []),
         fetch(`${API}/dosing/projects`,      { headers: { Authorization: `Bearer ${token()}` } }).then(r => r.ok ? r.json() : []),
+        fetch(`${API}/merged/projects`,      { headers: { Authorization: `Bearer ${token()}` } }).then(r => r.ok ? r.json() : []),
       ]);
       const all: BackendProject[] = [
         ...ms.map((p: BackendProject) => ({ ...p, system_type: "multisensor" as const })),
         ...dos.map((p: BackendProject) => ({ ...p, system_type: "dosing" as const })),
       ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
       setProjects(all);
+      setMerged(mrg);
     } catch { setError("Could not load projects — make sure the backend is running."); setProjects([]); }
     finally { setLoading(false); }
   }, []);
@@ -111,7 +124,34 @@ export default function DashboardPage() {
     }
   }
 
-  const recentProjects = projects.slice(0, 4);
+  async function deleteMerged(m: MergedProject) {
+    if (!window.confirm(`Delete "${m.name}"? This cannot be undone.`)) return;
+    try {
+      await fetch(`${API}/merged/projects/${m.id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token()}` },
+      });
+      setMerged(prev => prev.filter(p => p.id !== m.id));
+      setHistory(prev => [`Deleted merged project "${m.name}"`, ...prev]);
+    } catch { alert("Could not delete merged project."); }
+  }
+
+  async function renameMerged(m: MergedProject) {
+    const newName = window.prompt("Enter new name:", m.name);
+    if (!newName || !newName.trim() || newName.trim() === m.name) return;
+    const trimmed = newName.trim();
+    try {
+      const res = await fetch(`${API}/merged/projects/${m.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` },
+        body: JSON.stringify({ name: trimmed }),
+      });
+      if (!res.ok) { const d = await res.json(); alert(d.detail || "Could not rename."); return; }
+      setMerged(prev => prev.map(p => p.id === m.id ? { ...p, name: trimmed } : p));
+      setHistory(prev => [`Renamed "${m.name}" to "${trimmed}"`, ...prev]);
+    } catch { alert("Could not connect to server."); }
+  }
+  const recentProjects   = projects.slice(0, 4);
   const multisensorCount = projects.filter(p => p.system_type === "multisensor").length;
   const dosingCount      = projects.filter(p => p.system_type === "dosing").length;
   const totalSamples     = projects.reduce((acc, p) => acc + p.samples.length, 0);
@@ -119,9 +159,11 @@ export default function DashboardPage() {
   return (
     <div className="dashboard-page">
       <header className="topbar">
-        <div className="logo">
-          <img src="/logocerte.png" alt="CERTE logo" />
-          <strong>CERTE</strong>
+        <div className="topbar-left">
+          <div className="logo" style={{ cursor: "default" }}>
+            <img src="/logocerte.png" alt="CERTE logo" />
+            <strong>CERTE</strong>
+          </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           {isResearcher && (
@@ -196,6 +238,33 @@ export default function DashboardPage() {
                     +{projects.length - 4} more — see all
                   </button>
                 )}
+                {merged.slice(0, 2).map((m) => (
+                  <div className="project-item" key={m.id}>
+                    <span className="project-name" style={{ cursor: "pointer" }}
+                      onClick={() => nav(`/merged-project/${encodeURIComponent(m.id)}`)}>
+                      {m.name}
+                      <span className="project-type-badge merged">Merged</span>
+                    </span>
+                    <div className="project-actions">
+                      <button type="button" className="icon-btn rename-btn"
+                        onClick={() => renameMerged(m)} title="Rename">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                        </svg>
+                      </button>
+                      <button type="button" className="icon-btn delete-btn"
+                        onClick={() => deleteMerged(m)} title="Delete">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="3 6 5 6 21 6"/>
+                          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                          <path d="M10 11v6"/><path d="M14 11v6"/>
+                          <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </>
             )}
           </div>
@@ -225,6 +294,12 @@ export default function DashboardPage() {
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/><path d="M12 6v6l4 2"/></svg>
               </div>
               <div><div className="db-stat-value">{dosingCount}</div><div className="db-stat-label">Dosing</div></div>
+            </div>
+            <div className="db-stat-card">
+              <div className="db-stat-icon db-stat-icon-blue">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+              </div>
+              <div><div className="db-stat-value">{merged.length}</div><div className="db-stat-label">Merged</div></div>
             </div>
             <div className="db-stat-card">
               <div className="db-stat-icon db-stat-icon-blue">
@@ -285,6 +360,34 @@ export default function DashboardPage() {
                             </svg>
                           </button>
                           <button type="button" className="icon-btn delete-btn" onClick={() => deleteProject(p)} title="Delete">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="3 6 5 6 21 6"/>
+                              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                              <path d="M10 11v6"/><path d="M14 11v6"/>
+                              <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                            </svg>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {merged.map((m) => (
+                    <tr key={m.id} onClick={() => nav(`/merged-project/${encodeURIComponent(m.id)}`)} style={{ cursor: "pointer" }}>
+                      <td className="db-table-name">{m.name}</td>
+                      <td><span className="project-type-badge merged">Merged</span></td>
+                      <td className="db-table-num">
+                        {((m.project_a?.samples.length ?? 0) + (m.project_b?.samples.length ?? 0)) || "—"}
+                      </td>
+                      <td className="db-table-date">{formatDate(m.created_at)}</td>
+                      <td>
+                        <div className="db-table-actions" onClick={e => e.stopPropagation()}>
+                          <button type="button" className="icon-btn rename-btn" onClick={() => renameMerged(m)} title="Rename">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                            </svg>
+                          </button>
+                          <button type="button" className="icon-btn delete-btn" onClick={() => deleteMerged(m)} title="Delete">
                             <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                               <polyline points="3 6 5 6 21 6"/>
                               <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>

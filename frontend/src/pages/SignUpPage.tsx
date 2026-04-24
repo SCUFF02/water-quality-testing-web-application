@@ -16,6 +16,7 @@ export default function SignUpPage() {
     const trimmed = username.trim();
     if (!trimmed)            { setError("Username is required."); return; }
     if (trimmed.length < 3)  { setError("Username must be at least 3 characters."); return; }
+    if (!email.toLowerCase().endsWith("@certe.tn")) { setError("Only @certe.tn email addresses are allowed."); return; }
     if (password.length < 6) { setError("Password must be at least 6 characters."); return; }
     setError("");
 
@@ -75,7 +76,7 @@ export default function SignUpPage() {
             </div>
             <div className="wave-field">
               <label>Email address</label>
-              <input type="email" placeholder="yourname@email.com" value={email} required disabled={success}
+              <input type="email" placeholder="yourname@certe.tn" value={email} required disabled={success}
                 onChange={(e) => { setEmail(e.target.value); setError(""); }} />
             </div>
             <div className="wave-field">

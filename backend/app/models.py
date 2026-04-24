@@ -41,6 +41,7 @@ class Project(Base):
     system_type = Column(Enum(SystemType), nullable=False)
     user_id     = Column(String(36),  ForeignKey("users.id"), nullable=False)
     manual_only = Column(Boolean, default=False)
+    status      = Column(String(20), default="idle")
     created_at  = Column(DateTime, default=datetime.utcnow)
 
     owner      = relationship("User",         back_populates="projects")
@@ -89,3 +90,17 @@ class DosingJob(Base):
     processed_at  = Column(DateTime,    default=datetime.utcnow)
 
     project = relationship("Project", back_populates="dosing_jobs") 
+
+# ── Merged projects ───────────────────────────────────────────────────────────
+class MergedProject(Base):
+    __tablename__ = "merged_projects"
+    id           = Column(String(36),  primary_key=True, default=gen_uuid)
+    user_id      = Column(String(36),  ForeignKey("users.id"), nullable=False)
+    name         = Column(String(120), nullable=False)
+    project_a_id = Column(String(36),  ForeignKey("projects.id"), nullable=False)
+    project_b_id = Column(String(36),  ForeignKey("projects.id"), nullable=False)
+    created_at   = Column(DateTime,    default=datetime.utcnow)
+
+    owner     = relationship("User",    foreign_keys=[user_id])
+    project_a = relationship("Project", foreign_keys=[project_a_id])
+    project_b = relationship("Project", foreign_keys=[project_b_id])

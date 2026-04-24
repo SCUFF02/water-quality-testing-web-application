@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 from app.db import get_db
-from app.models import User, Project, UserRole
+from app.models import User, Project, UserRole, MergedProject
 from app.schemas import UserOut
 from app.auth import get_current_user
 
@@ -57,6 +57,7 @@ def get_user_projects(
     if not user:
         raise HTTPException(404, "User not found")
     projects = db.query(Project).filter(Project.user_id == user.id).all()
+    merged   = db.query(MergedProject).filter(MergedProject.user_id == user.id).all()
     return [
         {
             "id":          p.id,
@@ -70,6 +71,22 @@ def get_user_projects(
             ],
         }
         for p in projects
+    ] + [
+        {
+            "id":           m.id,
+            "name":         m.name,
+            "system_type":  "merged",
+            "created_at":   m.created_at.isoformat(),
+            "manual_only":  False,
+            "project_a_id": m.project_a_id,
+            "project_b_id": m.project_b_id,
+            "samples": (
+                [{"id": s.id, "sample_name": s.sample_name, "region": s.region} for s in m.project_a.samples]
+                + [{"id": s.id, "sample_name": s.sample_name, "region": s.region} for s in m.project_b.samples]
+                if m.project_a and m.project_b else []
+            ),
+        }
+        for m in merged
     ]
 
 @router.delete("/{user_id}")

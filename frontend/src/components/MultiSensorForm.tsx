@@ -182,7 +182,7 @@ export default function DosingSystemForm({ onClose, projects }: Props) {
                   <p className="sample-entry-title">Source {i + 1}</p>
                   <label htmlFor={`source-${i}`}>Source name</label>
                   <input id={`source-${i}`} list="sources-list" value={sources[i]} required
-                    placeholder="e.g. Well A"
+                    placeholder="e.g. Well A" maxLength={18}
                     onChange={(e) => updateSource(i, e.target.value)} />
                 </div>
               ))}

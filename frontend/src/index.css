@@ -763,6 +763,7 @@ label {
 }
 .project-type-badge.multisensor { background: var(--accent-subtle); color: var(--accent); }
 .project-type-badge.dosing      { background: var(--green-subtle);  color: var(--green);  }
+.project-type-badge.merged      { background: #f3effe; color: #7c3aed; border: 1px solid #ddd6fe; }
 
 .project-actions { display: flex; align-items: center; gap: 3px; flex-shrink: 0; }
 
@@ -1007,32 +1008,30 @@ label {
 .chart-param-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
 
 .bar-chart {
-  display: flex;
-  align-items: flex-end;
-  gap: 5px;
-  height: 140px;
-  padding-top: 16px;
-  overflow-x: auto;
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  gap: 8px;
+  padding-top: 24px;
+  overflow-x: visible;
+  overflow-y: visible;
 }
 .bar-col {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 4px;
-  flex: 1;
-  min-width: 22px;
-  height: 100%;
+  min-width: 0;
   justify-content: flex-end;
 }
 .bar {
   width: 100%;
   background: var(--accent);
   border-radius: 3px 3px 0 0;
-  min-height: 3px;
+  min-height: 4px;
   transition: height 0.3s ease;
 }
-.bar-label { font-size: 10px; color: var(--ink-3); font-family: var(--mono); }
-.bar-x     { font-size: 10px; color: var(--ink-3); }
+.bar-label { font-size: 11px; color: var(--ink-2); font-family: var(--mono); font-weight: 600; }
+.bar-x     { font-size: 11px; color: var(--ink-3); width: 100%; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .no-data {
   color: var(--ink-3);
@@ -1123,6 +1122,7 @@ label {
   gap: 1px;
 }
 .info-sample-header { display: flex; align-items: center; }
+.info-sample-actions { display: flex; gap: 4px; margin-top: 6px; justify-content: flex-end; }
 .info-sample-name   { font-size: 12.5px; font-weight: 500; color: var(--ink); }
 .info-sample-region { font-size: 11px; color: var(--ink-3); }
 .info-sample-count  { font-size: 11px; color: var(--accent); font-weight: 600; font-family: var(--mono); }
@@ -2152,7 +2152,7 @@ label {
 .db-table-name { font-weight: 600; color: var(--ink); }
 .db-table-num  { font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
 .db-table-date { font-size: 12px; color: var(--ink-3); font-family: var(--mono); }
-.db-table-actions { display: flex; gap: 4px; justify-content: flex-end; }
+.db-table-actions { display: flex; gap: 4px; justify-content: flex-start; }
 
 .db-empty-state {
   padding: 48px 24px;
@@ -2459,4 +2459,105 @@ label {
   .researcher-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* ── Merged Project Page ──────────────────────────────────────────────────── */
+.merged-panels-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+@media (max-width: 768px) {
+  .merged-panels-grid { grid-template-columns: 1fr; }
+}
+
+.merged-panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: 20px;
+  box-shadow: var(--shadow-xs);
+}
+
+.merged-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.merged-panel-header h3 {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink-1);
+  margin: 0;
+}
+
+.merged-samples-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.merged-sample-block {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: 10px 12px;
+}
+
+.merged-sample-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+.merged-sample-row:last-child { border-bottom: none; }
+
+.merged-sample-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-1);
+  margin-bottom: 6px;
+}
+
+.merged-sample-region {
+  font-size: 11px;
+  color: var(--ink-3);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.merged-readings-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.merged-reading-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  border: 1.5px solid;
+  border-radius: 8px;
+  padding: 5px 10px;
+  min-width: 72px;
+  background: var(--surface);
+}
+
+.merged-reading-param {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.merged-reading-value {
+  font-size: 14px;
+  font-weight: 700;
+  margin-top: 2px;
 }

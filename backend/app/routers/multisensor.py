@@ -42,28 +42,32 @@ def get_project(project_id: str, db: Session = Depends(get_db), current_user: Us
         q = q.filter(Project.user_id == current_user.id)
     p = q.first()
     if not p: raise HTTPException(404, "Project not found")
-    return p
+    return ProjectOut.from_orm_with_owner(p)
 
 @router.patch("/projects/{project_id}", response_model=ProjectOut)
 def rename_project(project_id: str, body: ProjectUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Rename a project. Only the owner can rename."""
-    p = db.query(Project).filter(Project.id == project_id, Project.user_id == current_user.id).first()
+    q = db.query(Project).filter(Project.id == project_id)
+    if current_user.role not in ("admin", "researcher"):
+        q = q.filter(Project.user_id == current_user.id)
+    p = q.first()
     if not p: raise HTTPException(404, "Project not found")
-    # Check new name not taken by same user
     exists = db.query(Project).filter(
-        Project.user_id == current_user.id,
+        Project.user_id == p.user_id,
         Project.name == body.name,
         Project.id != project_id
     ).first()
-    if exists: raise HTTPException(400, "You already have a project with that name")
+    if exists: raise HTTPException(400, "This user already has a project with that name")
     p.name = body.name
     db.commit()
     db.refresh(p)
-    return p
+    return ProjectOut.from_orm_with_owner(p)
 
 @router.delete("/projects/{project_id}")
 def delete_project(project_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    p = db.query(Project).filter(Project.id == project_id, Project.user_id == current_user.id).first()
+    q = db.query(Project).filter(Project.id == project_id)
+    if current_user.role not in ("admin", "researcher"):
+        q = q.filter(Project.user_id == current_user.id)
+    p = q.first()
     if not p: raise HTTPException(404, "Project not found")
     db.delete(p)
     db.commit()
@@ -78,9 +82,31 @@ def push_reading(project_id: str, body: ReadingIn, x_api_key: str = Header(...),
     db.add(reading); db.commit()
     return {"status": "saved", "id": reading.id}
 
+# ESP32 — fetch project info + status on boot (API key only, no JWT)
+@router.get("/{project_id}/info")
+def get_project_info_device(project_id: str, x_api_key: str = Header(...), db: Session = Depends(get_db)):
+    """ESP32 calls this on boot to get sample list and current status."""
+    if x_api_key != settings.DEVICE_API_KEY:
+        raise HTTPException(403, "Invalid device API key")
+    p = db.query(Project).filter(Project.id == project_id).first()
+    if not p: raise HTTPException(404, "Project not found")
+    return {
+        "id":           p.id,
+        "name":         p.name,
+        "status":       p.status or "idle",
+        "sample_count": len(p.samples),
+        "samples": [
+            {"id": s.id, "sample_name": s.sample_name, "region": s.region}
+            for s in p.samples
+        ]
+    }
+
 @router.post("/{project_id}/readings", response_model=ReadingOut)
 def add_reading(project_id: str, body: ReadingIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    if not db.query(Project).filter(Project.id == project_id, Project.user_id == current_user.id).first():
+    q = db.query(Project).filter(Project.id == project_id)
+    if current_user.role not in ("admin", "researcher"):
+        q = q.filter(Project.user_id == current_user.id)
+    if not q.first():
         raise HTTPException(404, "Project not found")
     reading = SensorReading(project_id=project_id, sample_id=body.sample_id, parameter=body.parameter, value=body.value, unit=body.unit, source=body.source)
     db.add(reading); db.commit(); db.refresh(reading)
@@ -105,9 +131,57 @@ def get_readings(
     items = q.offset((page - 1) * per_page).limit(per_page).all()
     return {"total": total, "page": page, "per_page": per_page, "items": items}
 
+@router.post("/{project_id}/samples")
+def add_sample(
+    project_id: str,
+    body: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Add a new sample to an existing project."""
+    q = db.query(Project).filter(Project.id == project_id)
+    if current_user.role not in ("admin", "researcher"):
+        q = q.filter(Project.user_id == current_user.id)
+    if not q.first():
+        raise HTTPException(404, "Project not found")
+    sample = Sample(
+        project_id  = project_id,
+        sample_name = body.get("sample_name", ""),
+        region      = body.get("region", ""),
+    )
+    db.add(sample)
+    db.commit()
+    db.refresh(sample)
+    return {"id": sample.id, "sample_name": sample.sample_name, "region": sample.region}
+
+@router.patch("/{project_id}/samples/{sample_id}")
+def rename_sample(project_id: str, sample_id: str, body: dict,
+                  db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    q = db.query(Sample).join(Project).filter(Sample.id == sample_id)
+    if current_user.role not in ("admin", "researcher"):
+        q = q.filter(Project.user_id == current_user.id)
+    sample = q.first()
+    if not sample: raise HTTPException(404, "Sample not found")
+    if "sample_name" in body and body["sample_name"].strip():
+        name = body["sample_name"].strip()
+        if len(name) > 18:
+            raise HTTPException(400, "Sample name must be 18 characters or fewer")
+        sample.sample_name = name
+    if "region" in body:
+        region = body["region"]
+        if len(region) > 25:
+            raise HTTPException(400, "Region must be 25 characters or fewer")
+        sample.region = region
+    db.commit()
+    db.refresh(sample)
+    return {"id": sample.id, "sample_name": sample.sample_name, "region": sample.region}
+
 @router.delete("/{project_id}/samples/{sample_id}")
 def delete_sample(project_id: str, sample_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    sample = db.query(Sample).join(Project).filter(Sample.id == sample_id, Project.user_id == current_user.id).first()
+    q = db.query(Sample).join(Project).filter(Sample.id == sample_id)
+    if current_user.role not in ("admin", "researcher"):
+        q = q.filter(Project.user_id == current_user.id)
+    sample = q.first()
     if not sample: raise HTTPException(404, "Sample not found")
     db.delete(sample); db.commit()
     return {"deleted": sample_id}
@@ -126,7 +200,7 @@ def get_status(project_id: str, x_api_key: str = Header(...), db: Session = Depe
     p = db.query(Project).filter(Project.id == project_id).first()
     if not p:
         raise HTTPException(404, "Project not found")
-    return {"status": p.status}
+    return {"status": p.status or "idle", "sample_count": len(p.samples)}
 
 
 @router.post("/{project_id}/start")
@@ -154,6 +228,17 @@ def stop_project(project_id: str, db: Session = Depends(get_db),
     p = q.first()
     if not p:
         raise HTTPException(404, "Project not found")
+    p.status = "idle"
+    db.commit()
+    return {"status": "idle"}
+
+@router.post("/{project_id}/stop-device")
+def stop_project_device(project_id: str, x_api_key: str = Header(...), db: Session = Depends(get_db)):
+    """ESP32 calls this after finishing all samples — no JWT needed."""
+    if x_api_key != settings.DEVICE_API_KEY:
+        raise HTTPException(403, "Invalid device API key")
+    p = db.query(Project).filter(Project.id == project_id).first()
+    if not p: raise HTTPException(404, "Project not found")
     p.status = "idle"
     db.commit()
     return {"status": "idle"}

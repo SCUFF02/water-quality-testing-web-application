@@ -13,6 +13,8 @@ type BackendProject = {
   id: string; name: string;
   system_type: "multisensor" | "dosing";
   created_at: string; manual_only: boolean;
+  status?: "idle" | "active";
+  owner_username?: string;
   samples: { id: string; sample_name: string; region: string }[];
 };
 
@@ -247,8 +249,8 @@ function LineChart({ points, color }: { points: DataPoint[]; color: string; labe
 // ── Heatmap ──────────────────────────────────────────────────────────────────
 function HeatmapChart({ samples, manualData }: { samples: SampleEntry[]; manualData: DataPoint[] }) {
   const params = PARAMETERS.filter((p) => p !== "Other");
-  if (samples.length === 0 || manualData.length === 0) {
-    return <p className="no-data">Add manual data to see the heatmap.</p>;
+  if (samples.length === 0) {
+    return <p className="no-data">No samples yet.</p>;
   }
 
   function getValue(sampleName: string, param: string): number | null {
@@ -350,6 +352,8 @@ export default function ProjectDataPage() {
   const [newError,      setNewError]      = useState("");
   const [selectedSample, setSelectedSample] = useState<string>("");
   const [confirmDeleteSample, setConfirmDeleteSample] = useState<string | null>(null);
+  const [projectStatus, setProjectStatus] = useState<"idle" | "active">("idle");
+  const [statusLoading, setStatusLoading] = useState(false);
 
   // ── Anomaly detection ─────────────────────────────────────────────────────
   const [anomalies,     setAnomalies]     = useState<AnomalyMsg[]>([]);
@@ -397,23 +401,22 @@ export default function ProjectDataPage() {
 
       if (!proj) { setNotFound(true); setLoading(false); return; }
       setProject(proj);
+      setProjectStatus((proj.status as "idle" | "active") || "idle");
 
-      // Fetch paginated readings (up to 500 at a time)
-      if (systemType === "multisensor") {
-        const allReadings: BackendReading[] = [];
-        let page = 1;
-        while (true) {
-          const rRes = await fetch(`${API}/multisensor/${projectId}/readings?page=${page}&per_page=500`, {
-            headers: { Authorization: `Bearer ${token()}` }
-          });
-          if (!rRes.ok) break;
-          const data = await rRes.json();
-          allReadings.push(...data.items);
-          if (allReadings.length >= data.total || data.items.length === 0) break;
-          page++;
-        }
-        setReadings(allReadings);
+      // Fetch paginated readings (up to 500 at a time) — works for both multisensor and dosing
+      const allReadings: BackendReading[] = [];
+      let page = 1;
+      while (true) {
+        const rRes = await fetch(`${API}/multisensor/${projectId}/readings?page=${page}&per_page=500`, {
+          headers: { Authorization: `Bearer ${token()}` }
+        });
+        if (!rRes.ok) break;
+        const data = await rRes.json();
+        allReadings.push(...data.items);
+        if (allReadings.length >= data.total || data.items.length === 0) break;
+        page++;
       }
+      setReadings(allReadings);
     } catch {
       setLoadError("Could not connect to server. Make sure the backend is running.");
     }
@@ -429,7 +432,7 @@ export default function ProjectDataPage() {
       return {
         x: i + 1,
         y: r.value,
-        sampleName: sample?.sample_name || r.sample_id || "Unknown",
+        sampleName: sample?.sample_name || "Unknown",
         region:     sample?.region || "",
         parameter:  r.parameter,
       };
@@ -444,21 +447,46 @@ export default function ProjectDataPage() {
 
   // ── Save manual reading to backend ────────────────────────────────────────
   async function saveReadingToBackend(entry: DataPoint) {
-    const sample = project?.samples.find(s => s.sample_name === entry.sampleName);
+    let sampleId: string | null =
+      project?.samples.find(s => s.sample_name === entry.sampleName)?.id || null;
+
+    if (!sampleId && entry.sampleName && entry.sampleName !== "Unknown") {
+      try {
+        const sRes = await fetch(`${API}/multisensor/${projectId}/samples`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` },
+          body: JSON.stringify({ sample_name: entry.sampleName, region: entry.region || "" }),
+        });
+        if (sRes.ok) {
+          const created = await sRes.json();
+          sampleId = created.id;
+        } else {
+          const err = await sRes.json().catch(() => ({}));
+          console.error("Could not create sample:", sRes.status, err);
+        }
+      } catch (e) { console.error("Could not create sample", e); }
+    }
+
     try {
       const res = await fetch(`${API}/multisensor/${projectId}/readings`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` },
         body: JSON.stringify({
-          sample_id: sample?.id || null,
+          sample_id: sampleId,
           parameter: entry.parameter,
           value:     entry.y,
           unit:      PARAM_RANGES[entry.parameter || ""]?.unit?.trim() || "",
           source:    "manual",
         }),
       });
-      if (res.ok) await loadData(); // refresh readings
-    } catch { console.error("Could not save reading to backend"); }
+      if (res.ok) {
+        await loadData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        console.error("Failed to save reading:", res.status, err);
+        alert(`Could not save reading: ${err.detail || res.status}`);
+      }
+    } catch (e) { console.error("Could not save reading to backend", e); alert("Could not connect to server."); }
   }
 
   // ── Delete sample from backend ────────────────────────────────────────────
@@ -476,7 +504,33 @@ export default function ProjectDataPage() {
     } catch { alert("Could not delete sample."); }
   }
 
+  // ── Rename sample ─────────────────────────────────────────────────────────
+  async function renameSample(sampleName: string) {
+    const sample = project?.samples.find(s => s.sample_name === sampleName);
+    if (!sample?.id) return;
+    const newName = window.prompt("New sample name (max 18 chars):", sampleName);
+    if (!newName || !newName.trim() || newName.trim() === sampleName) return;
+    if (newName.trim().length > 18) { alert("Sample name must be 18 characters or fewer."); return; }
+    const newRegion = window.prompt("New region (leave blank to keep current):", sample.region) ?? sample.region;
+    try {
+      const res = await fetch(`${API}/multisensor/${projectId}/samples/${sample.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` },
+        body: JSON.stringify({ sample_name: newName.trim(), region: newRegion }),
+      });
+      if (!res.ok) { alert("Could not rename sample."); return; }
+      if (selectedSample === sampleName) setSelectedSample(newName.trim());
+      await loadData();
+    } catch { alert("Could not connect to server."); }
+  }
+
   // ── Export (use backend endpoints) ───────────────────────────────────────
+  function logout() {
+    localStorage.removeItem("token");
+    localStorage.removeItem("currentUser");
+    nav("/signin", { replace: true });
+  }
+
   async function exportData(format: "json" | "csv") {
     if (!project) return;
     const endpoint = project.system_type === "multisensor"
@@ -496,6 +550,21 @@ export default function ProjectDataPage() {
   }
 
   // ── Modal handlers ────────────────────────────────────────────────────────
+  async function toggleCollection() {
+    const action = projectStatus === "idle" ? "start" : "stop";
+    setStatusLoading(true);
+    try {
+      const res = await fetch(`${API}/multisensor/${projectId}/${action}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token()}` },
+      });
+      if (res.ok) {
+        setProjectStatus(action === "start" ? "active" : "idle");
+      }
+    } catch { console.error("Could not update status"); }
+    finally { setStatusLoading(false); }
+  }
+
   function openManualModal() {
     setPendingEntries([]); setMParameter(PARAMETERS[0]); setMValue(""); setMError("");
     setNewSampleName(""); setNewRegion(""); setNewParam(PARAMETERS[0]); setNewValue(""); setNewError("");
@@ -545,6 +614,7 @@ export default function ProjectDataPage() {
   function submitNewSampleInfo(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!newSampleName.trim()) { setNewError("Sample name is required."); return; }
+    if (newSampleName.trim().length > 18) { setNewError("Sample name must be 18 characters or fewer."); return; }
     setNewError(""); setModalPhase("new-entry");
   }
 
@@ -607,7 +677,7 @@ export default function ProjectDataPage() {
     const seen = new Map<string, SampleEntry>();
     for (const s of multiSamples) seen.set(s.sampleName, s);
     for (const p of manualData) {
-      if (p.sampleName && !seen.has(p.sampleName))
+      if (p.sampleName && p.sampleName !== "Unknown" && !seen.has(p.sampleName))
         seen.set(p.sampleName, { sampleName: p.sampleName, region: p.region || "" });
     }
     return Array.from(seen.values());
@@ -662,28 +732,51 @@ export default function ProjectDataPage() {
       {/* TOPBAR */}
       <header className="topbar">
         <div className="topbar-left">
-          <div className="logo">
+          <div className="logo" style={{ cursor: "pointer" }} onClick={() => nav("/app")}>
             <img src="/logocerte.png" alt="CERTE logo" />
             <strong>CERTE</strong>
           </div>
           <button type="button" className="back-btn" onClick={() => {
-            try {
-              const role = JSON.parse(localStorage.getItem("currentUser") || "{}").role;
-              nav(role === "admin" ? "/admin" : "/app");
-            } catch { nav("/app"); }
-          }}>← Back</button>
+            const role = (() => { try { return JSON.parse(localStorage.getItem("currentUser") || "{}").role; } catch { return "user"; } })();
+            if ((role === "admin" || role === "researcher") && project?.owner_username) {
+              nav(`/user/${encodeURIComponent(project.owner_username)}`);
+            } else {
+              nav("/profile");
+            }
+          }}>← Profile</button>
           <h1 className="topbar-project-name">{project.name}</h1>
+          <span className={`card-type-badge ${project.system_type}`} style={{ fontSize: 11 }}>
+            {project.system_type === "multisensor" ? "MultiSensor" : "Dosing"}
+          </span>
         </div>
         <div className="export-actions">
+          <button type="button" onClick={() => loadData()}>↻ Refresh</button>
           <button type="button" onClick={() => exportData("json")}>Export JSON</button>
           <button type="button" onClick={() => exportData("csv")}>Export CSV</button>
+          <button className="logout-btn" type="button" onClick={logout}>Logout</button>
         </div>
       </header>
 
       <div className="project-layout">
         <aside className="project-sidebar">
-          <button type="button" onClick={() => alert("Connect your ESP32 — it will push data to /multisensor/{id}/push automatically.")}>Connect to system</button>
-          <button type="button" onClick={() => alert("ESP32 pushes data automatically via HTTP.")}>Start collecting data</button>
+          <button
+            type="button"
+            onClick={toggleCollection}
+            disabled={statusLoading}
+            style={{
+              background: projectStatus === "active" ? "#DF6E5B" : "var(--accent)",
+              color: "#fff",
+              border: "none",
+              borderRadius: 8,
+              padding: "8px 16px",
+              fontWeight: 600,
+              cursor: "pointer",
+              marginBottom: 6,
+              width: "100%",
+            }}
+          >
+            {statusLoading ? "…" : projectStatus === "active" ? "⏹ Stop collection" : "▶ Start collection"}
+          </button>
           <button type="button" onClick={openManualModal}>Add manual data</button>
 
           <div className="project-info-panel">
@@ -693,14 +786,38 @@ export default function ProjectDataPage() {
 
             {project.system_type === "dosing" && (
               <>
-                <div className="info-row">
-                  <span className="info-label">Dosing liquid</span>
-                  <span className="info-value">{project.samples.length > 0 ? project.samples.map(s => s.sample_name).join(", ") : "—"}</span>
+                <div className="info-section-title">
+                  {project.samples.length} Source{project.samples.length !== 1 ? "s" : ""}
                 </div>
-                <div className="info-section-title">Sources</div>
                 <ul className="info-list">
                   {project.samples.map((s, i) => (
-                    <li key={i}><span className="info-list-index">S{i + 1}</span> {s.sample_name}</li>
+                    <li key={i} className="info-sample-item">
+                      <div className="info-sample-header">
+                        <span className="info-list-index">#{i + 1}</span>
+                        <span className="info-sample-name">{s.sample_name || "—"}</span>
+                      </div>
+                      <div className="info-sample-region">{s.region || "—"}</div>
+                      <div className="info-sample-actions">
+                        <button type="button" className="icon-btn rename-btn"
+                          title={`Rename ${s.sample_name}`}
+                          onClick={() => renameSample(s.sample_name)}>
+                          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                          </svg>
+                        </button>
+                        <button type="button" className="icon-btn delete-btn"
+                          title={`Delete ${s.sample_name}`}
+                          onClick={() => setConfirmDeleteSample(s.sample_name)}>
+                          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="3 6 5 6 21 6"/>
+                            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                            <path d="M10 11v6"/><path d="M14 11v6"/>
+                            <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                          </svg>
+                        </button>
+                      </div>
+                    </li>
                   ))}
                 </ul>
               </>
@@ -719,19 +836,6 @@ export default function ProjectDataPage() {
                         <div className="info-sample-header">
                           <span className="info-list-index">#{i + 1}</span>
                           <span className="info-sample-name">{s.sampleName || "—"}</span>
-                          <button
-                            type="button"
-                            className="sample-delete-btn"
-                            title={`Delete ${s.sampleName}`}
-                            onClick={() => setConfirmDeleteSample(s.sampleName)}
-                          >
-                            <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <polyline points="3 6 5 6 21 6"/>
-                              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                              <path d="M10 11v6"/><path d="M14 11v6"/>
-                              <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-                            </svg>
-                          </button>
                         </div>
                         <div className="info-sample-region">{s.region || "—"}</div>
                         {count > 0 && (
@@ -739,6 +843,26 @@ export default function ProjectDataPage() {
                             {count} manual entr{count === 1 ? "y" : "ies"}
                           </div>
                         )}
+                        <div className="info-sample-actions">
+                          <button type="button" className="icon-btn rename-btn"
+                            title={`Rename ${s.sampleName}`}
+                            onClick={() => renameSample(s.sampleName)}>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                            </svg>
+                          </button>
+                          <button type="button" className="icon-btn delete-btn"
+                            title={`Delete ${s.sampleName}`}
+                            onClick={() => setConfirmDeleteSample(s.sampleName)}>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="3 6 5 6 21 6"/>
+                              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                              <path d="M10 11v6"/><path d="M14 11v6"/>
+                              <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                            </svg>
+                          </button>
+                        </div>
                       </li>
                     );
                   })}
@@ -836,6 +960,7 @@ export default function ProjectDataPage() {
                   const points = parameterGroups[param];
                   const maxY   = Math.max(...points.map((p) => Math.abs(p.y)), 1);
                   const color  = PARAM_COLORS[param] ?? "#2f86c7";
+                  const MAX_BAR_PX = 160;
                   return (
                     <div key={param} className="graph-card">
                       <div className="chart-header">
@@ -846,7 +971,7 @@ export default function ProjectDataPage() {
                         {points.map((point, i) => (
                           <div key={i} className="bar-col" title={`${point.sampleName} (${point.region}): ${point.y}`}>
                             <span className="bar-label">{point.y}</span>
-                            <div className="bar" style={{ height: `${(Math.abs(point.y) / maxY) * 100}%`, background: color }} />
+                            <div className="bar" style={{ height: `${(Math.abs(point.y) / maxY) * MAX_BAR_PX}px`, background: color }} />
                             <span className="bar-x">{point.sampleName?.split(" ")[0] ?? i + 1}</span>
                           </div>
                         ))}
@@ -1038,10 +1163,10 @@ export default function ProjectDataPage() {
                 <p style={{ fontSize: 13, color: "var(--ink-3)", marginBottom: 12 }}>Enter the details for a new sample to record data for.</p>
                 <form onSubmit={submitNewSampleInfo}>
                   <label htmlFor="new-sample-name">Sample name</label>
-                  <input id="new-sample-name" value={newSampleName} required placeholder="e.g. Lake B" autoFocus
+                  <input id="new-sample-name" value={newSampleName} required placeholder="e.g. Lake B" autoFocus maxLength={18}
                     onChange={(e) => { setNewSampleName(e.target.value); setNewError(""); }} />
                   <label htmlFor="new-region">Region</label>
-                  <input id="new-region" value={newRegion} placeholder="e.g. North Zone" onChange={(e) => setNewRegion(e.target.value)} />
+                  <input id="new-region" value={newRegion} placeholder="e.g. North Zone" maxLength={25} onChange={(e) => setNewRegion(e.target.value)} />
                   {newError && <p className="form-error">{newError}</p>}
                   <div className="modal-actions-column">
                     <div className="modal-actions-row"><button type="submit">Next →</button></div>

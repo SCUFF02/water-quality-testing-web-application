@@ -158,23 +158,16 @@ export default function ResearcherPage() {
   return (
     <div className="researcher-page">
       <header className="topbar">
-        <div className="logo">
-          <img src="/logocerte.png" alt="CERTE logo" />
-          <strong>CERTE</strong>
-          <span className="role-chip researcher-chip">Researcher</span>
+        <div className="topbar-left">
+          <div className="logo" style={{ cursor: "pointer" }} onClick={() => nav("/app")}>
+            <img src="/logocerte.png" alt="CERTE logo" />
+            <strong>CERTE</strong>
+            <span className="role-chip researcher-chip">Researcher</span>
+          </div>
+          <button type="button" className="back-btn" onClick={() => nav("/app")}>← Dashboard</button>
         </div>
-
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <button
-            type="button"
-            className="back-btn"
-            onClick={() => nav("/app")}
-          >
-            ← Dashboard
-          </button>
-          <button className="logout-btn" type="button" onClick={logout}>
-            Logout
-          </button>
+          <button className="logout-btn" type="button" onClick={logout}>Logout</button>
         </div>
       </header>
 
@@ -357,13 +350,17 @@ export default function ResearcherPage() {
                               key={p.id}
                               className="matched-project-card"
                               onClick={() =>
-                                nav(`/view-project/${encodeURIComponent(p.id)}`)
+                                nav(p.system_type === "merged"
+                                  ? `/merged-project/${encodeURIComponent(p.id)}`
+                                  : `/view-project/${encodeURIComponent(p.id)}`)
                               }
                             >
                               <span className={`project-type-badge ${p.system_type}`}>
                                 {p.system_type === "multisensor"
                                   ? "MultiSensor"
-                                  : "Dosing"}
+                                  : p.system_type === "dosing"
+                                  ? "Dosing"
+                                  : "Merged"}
                               </span>
 
                               <span className="matched-project-name">{p.name}</span>

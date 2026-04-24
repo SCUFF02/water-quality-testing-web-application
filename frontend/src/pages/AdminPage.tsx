@@ -38,7 +38,7 @@ export default function AdminPage() {
   const [view, setView]               = useState<AdminView>("dashboard");
   const [userSearch, setUserSearch]   = useState("");
   const [projectSearch, setProjectSearch] = useState("");
-  const [projectFilter, setProjectFilter] = useState<"all" | "multisensor" | "dosing">("all");
+  const [projectFilter, setProjectFilter] = useState<"all" | "multisensor" | "dosing" | "merged">("all");
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   const [users, setUsers]       = useState<BackendUser[]>([]);
@@ -92,6 +92,50 @@ export default function AdminPage() {
     } catch (e) { console.error(e); }
   }
 
+  async function deleteProject(p: { id: string; name: string; system_type: string }) {
+    if (!window.confirm(`Delete "${p.name}"? This cannot be undone.`)) return;
+    const endpoint = p.system_type === "multisensor" ? `/multisensor/projects/${p.id}` : `/dosing/projects/${p.id}`;
+    try {
+      await apiFetch(endpoint, { method: "DELETE" });
+      setProjects((prev: any[]) => prev.filter((x: any) => x.id !== p.id));
+    } catch { alert("Could not delete project."); }
+  }
+
+  async function renameProject(p: { id: string; name: string; system_type: string }) {
+    const newName = window.prompt("New project name:", p.name);
+    if (!newName || !newName.trim() || newName.trim() === p.name) return;
+    const endpoint = p.system_type === "multisensor" ? `/multisensor/projects/${p.id}` : `/dosing/projects/${p.id}`;
+    try {
+      const res = await apiFetch(endpoint, {
+        method: "PATCH",
+        body: JSON.stringify({ name: newName.trim() }),
+      });
+      if (!res.ok) { const d = await res.json(); alert(d.detail || "Could not rename."); return; }
+      setProjects((prev: any[]) => prev.map((x: any) => x.id === p.id ? { ...x, name: newName.trim() } : x));
+    } catch { alert("Could not connect to server."); }
+  }
+
+  async function deleteMergedProject(p: { id: string; name: string }) {
+    if (!window.confirm(`Delete "${p.name}"? This cannot be undone.`)) return;
+    try {
+      await apiFetch(`/merged/projects/${p.id}`, { method: "DELETE" });
+      setProjects((prev: any[]) => prev.filter((x: any) => x.id !== p.id));
+    } catch { alert("Could not delete merged project."); }
+  }
+
+  async function renameMergedProject(p: { id: string; name: string }) {
+    const newName = window.prompt("New name:", p.name);
+    if (!newName || !newName.trim() || newName.trim() === p.name) return;
+    try {
+      const res = await apiFetch(`/merged/projects/${p.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name: newName.trim() }),
+      });
+      if (!res.ok) { const d = await res.json(); alert(d.detail || "Could not rename."); return; }
+      setProjects((prev: any[]) => prev.map((x: any) => x.id === p.id ? { ...x, name: newName.trim() } : x));
+    } catch { alert("Could not connect to server."); }
+  }
+
   async function setUserRole(userId: string, newRole: "user" | "researcher" | "admin") {
     try {
       const updated = await apiFetch(`/users/${userId}/role`, {
@@ -136,10 +180,12 @@ export default function AdminPage() {
   return (
     <div className="admin-page">
       <header className="topbar">
-        <div className="logo">
-          <img src="/logocerte.png" alt="CERTE logo" />
-          <strong>CERTE</strong>
-          <span className="admin-badge">ADMIN</span>
+        <div className="topbar-left">
+          <div className="logo" style={{ cursor: "pointer" }} onClick={() => nav("/admin")}>
+            <img src="/logocerte.png" alt="CERTE logo" />
+            <strong>CERTE</strong>
+            <span className="admin-badge">ADMIN</span>
+          </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span className="admin-topbar-user">
@@ -201,11 +247,29 @@ export default function AdminPage() {
                         <tr key={i}>
                           <td style={{ fontWeight: 600 }}>{p.name}</td>
                           <td style={{ color: "var(--ink-2)" }}>{p.ownerUsername}</td>
-                          <td><span className={`project-type-badge ${p.system_type}`}>{p.system_type === "multisensor" ? "MultiSensor" : "Dosing"}</span></td>
+                          <td><span className={`project-type-badge ${p.system_type}`}>{p.system_type === "multisensor" ? "MultiSensor" : p.system_type === "dosing" ? "Dosing" : "Merged"}</span></td>
                           <td style={{ color: "var(--ink-3)", fontFamily: "var(--mono)", fontSize: 12 }}>{formatDate(p.created_at)}</td>
                           <td>
-                            <button type="button" className="btn-ghost admin-action-btn"
-                              onClick={() => nav(`/admin/project/${encodeURIComponent(p.id)}`)}>View</button>
+                            <div className="db-table-actions">
+                              <button type="button" className="btn-ghost admin-action-btn"
+                                onClick={() => nav(p.system_type === "merged" ? `/merged-project/${encodeURIComponent(p.id)}` : `/admin/project/${encodeURIComponent(p.id)}`)}>View</button>
+                              <button type="button" className="icon-btn rename-btn"
+                                onClick={() => p.system_type === "merged" ? renameMergedProject(p) : renameProject(p)} title="Rename">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                                </svg>
+                              </button>
+                              <button type="button" className="icon-btn delete-btn"
+                                onClick={() => p.system_type === "merged" ? deleteMergedProject(p) : deleteProject(p)} title="Delete">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <polyline points="3 6 5 6 21 6"/>
+                                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                                  <path d="M10 11v6"/><path d="M14 11v6"/>
+                                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                                </svg>
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -290,9 +354,9 @@ export default function AdminPage() {
                 <span className="admin-section-title">All projects</span>
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                   <div className="admin-filter-tabs">
-                    {(["all", "multisensor", "dosing"] as const).map(f => (
+                    {(["all", "multisensor", "dosing", "merged"] as const).map(f => (
                       <button key={f} type="button" className={`admin-filter-tab${projectFilter === f ? " active" : ""}`} onClick={() => setProjectFilter(f)}>
-                        {f === "all" ? "All" : f === "multisensor" ? "MultiSensor" : "Dosing"}
+                        {f === "all" ? "All" : f === "multisensor" ? "MultiSensor" : f === "dosing" ? "Dosing" : "Merged"}
                       </button>
                     ))}
                   </div>
@@ -311,11 +375,25 @@ export default function AdminPage() {
                       <tr key={i}>
                         <td style={{ fontWeight: 600 }}>{p.name}</td>
                         <td style={{ color: "var(--ink-2)" }}>{p.ownerUsername}</td>
-                        <td><span className={`project-type-badge ${p.system_type}`}>{p.system_type === "multisensor" ? "MultiSensor" : "Dosing"}</span></td>
+                        <td><span className={`project-type-badge ${p.system_type}`}>{p.system_type === "multisensor" ? "MultiSensor" : p.system_type === "dosing" ? "Dosing" : "Merged"}</span></td>
                         <td style={{ color: "var(--ink-3)", fontFamily: "var(--mono)", fontSize: 12 }}>{formatDate(p.created_at)}</td>
                         <td>
-                          <div style={{ display: "flex", gap: 5 }}>
-                            <button type="button" className="btn-ghost admin-action-btn" onClick={() => nav(`/admin/project/${encodeURIComponent(p.id)}`)}>View</button>
+                          <div className="db-table-actions">
+                            <button type="button" className="btn-ghost admin-action-btn" onClick={() => nav(p.system_type === "merged" ? `/merged-project/${encodeURIComponent(p.id)}` : `/admin/project/${encodeURIComponent(p.id)}`)}>View</button>
+                            <button type="button" className="icon-btn rename-btn" onClick={() => p.system_type === "merged" ? renameMergedProject(p) : renameProject(p)} title="Rename">
+                              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                              </svg>
+                            </button>
+                            <button type="button" className="icon-btn delete-btn" onClick={() => p.system_type === "merged" ? deleteMergedProject(p) : deleteProject(p)} title="Delete">
+                              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="3 6 5 6 21 6"/>
+                                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                                <path d="M10 11v6"/><path d="M14 11v6"/>
+                                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                              </svg>
+                            </button>
                           </div>
                         </td>
                       </tr>

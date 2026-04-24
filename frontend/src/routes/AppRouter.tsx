@@ -7,6 +7,7 @@ import ProfilePage       from "../pages/ProfilePage";
 import AdminPage         from "../pages/AdminPage";
 import ResearcherPage    from "../pages/ResearcherPage";
 import PublicProfilePage from "../pages/PublicProfilePage";
+import MergedProjectPage from "../pages/MergedProjectPage";
 import { getRole }       from "../auth/auth";
 
 /**
@@ -30,13 +31,6 @@ function isLoggedIn(): boolean {
   return !!localStorage.getItem("token");
 }
 
-// Any logged-in user (user, researcher, admin)
-function AuthRoute({ children }: { children: React.ReactNode }) {
-  if (!isLoggedIn()) return <Navigate to="/signin" replace />;
-  return <>{children}</>;
-}
-
-// Users and researchers only (not admin)
 function UserRoute({ children }: { children: React.ReactNode }) {
   if (!isLoggedIn())            return <Navigate to="/signin" replace />;
   if (getRole() === "admin")    return <Navigate to="/admin"  replace />;
@@ -54,6 +48,11 @@ function ResearcherRoute({ children }: { children: React.ReactNode }) {
   const role = getRole();
   if (role === "admin")           return <Navigate to="/admin"  replace />;
   if (role !== "researcher")      return <Navigate to="/app"    replace />;
+  return <>{children}</>;
+}
+
+function AnyAuthRoute({ children }: { children: React.ReactNode }) {
+  if (!isLoggedIn()) return <Navigate to="/signin" replace />;
   return <>{children}</>;
 }
 
@@ -87,15 +86,19 @@ export default function AppRouter() {
         <Route path="/project/:id"
           element={<UserRoute><ProjectDataPage /></UserRoute>} />
         <Route path="/profile"
-          element={<AuthRoute><ProfilePage /></AuthRoute>} />
+          element={<UserRoute><ProfilePage /></UserRoute>} />
 
         {/* Researcher only */}
         <Route path="/browse"
           element={<ResearcherRoute><ResearcherPage /></ResearcherRoute>} />
 
-        {/* View project — read-only access for researcher and admin */}
+        {/* Researcher project view — read-only access to any project */}
         <Route path="/view-project/:id"
           element={<PublicProfileRoute><ProjectDataPage /></PublicProfileRoute>} />
+
+        {/* Merged project view — accessible by all roles */}
+        <Route path="/merged-project/:id"
+          element={<AnyAuthRoute><MergedProjectPage /></AnyAuthRoute>} />
 
         {/* Admin + Researcher */}
         <Route path="/user/:username"

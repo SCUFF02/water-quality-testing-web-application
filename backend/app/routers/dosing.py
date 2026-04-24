@@ -38,21 +38,27 @@ def get_project(project_id: str, db: Session = Depends(get_db), current_user: Us
         q = q.filter(Project.user_id == current_user.id)
     p = q.first()
     if not p: raise HTTPException(404, "Project not found")
-    return p
+    return ProjectOut.from_orm_with_owner(p)
 
 @router.patch("/projects/{project_id}", response_model=ProjectOut)
 def rename_project(project_id: str, body: ProjectUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Rename a dosing project."""
-    p = db.query(Project).filter(Project.id == project_id, Project.user_id == current_user.id).first()
+    q = db.query(Project).filter(Project.id == project_id)
+    if current_user.role not in ("admin", "researcher"):
+        q = q.filter(Project.user_id == current_user.id)
+    p = q.first()
     if not p: raise HTTPException(404, "Project not found")
-    exists = db.query(Project).filter(Project.user_id == current_user.id, Project.name == body.name, Project.id != project_id).first()
-    if exists: raise HTTPException(400, "You already have a project with that name")
+    exists = db.query(Project).filter(Project.user_id == p.user_id, Project.name == body.name, Project.id != project_id).first()
+    if exists: raise HTTPException(400, "This user already has a project with that name")
     p.name = body.name; db.commit(); db.refresh(p)
-    return p
+    return ProjectOut.from_orm_with_owner(p)
 
 @router.delete("/projects/{project_id}")
 def delete_project(project_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    p = db.query(Project).filter(Project.id == project_id, Project.user_id == current_user.id).first()
+    q = db.query(Project).filter(Project.id == project_id)
+    if current_user.role not in ("admin", "researcher"):
+        q = q.filter(Project.user_id == current_user.id)
+    p = q.first()
     if not p: raise HTTPException(404, "Project not found")
     db.delete(p); db.commit()
     return {"deleted": project_id}

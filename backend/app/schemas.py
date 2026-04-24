@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, field_validator, Field
+from pydantic import BaseModel, EmailStr, field_validator, Field, model_validator
 from typing import Optional, List
 from datetime import datetime
 from app.models import SystemType, UserRole
@@ -13,15 +13,8 @@ class UserCreate(BaseModel):
     @field_validator("email")
     @classmethod
     def email_must_have_real_domain(cls, v: str) -> str:
-        domain = v.split("@")[-1]
-        parts  = domain.split(".")
-        if len(parts) < 2:
-            raise ValueError("Email domain must contain a dot (e.g. gmail.com)")
-        tld = parts[-1]
-        if len(tld) < 2:
-            raise ValueError("Email TLD is too short to be valid")
-        if len(domain) < 4:
-            raise ValueError("Email domain is too short to be valid")
+        if not v.lower().endswith("@certe.tn"):
+            raise ValueError("Only @certe.tn email addresses are allowed")
         return v
 
 class UserOut(BaseModel):
@@ -42,8 +35,8 @@ class LoginRequest(BaseModel):
 
 # ── Projects ──────────────────────────────────────────────────────────────────
 class SampleIn(BaseModel):
-    sample_name: str = Field(min_length=1, max_length=120)
-    region:      str = Field(default="",   max_length=120)
+    sample_name: str = Field(min_length=1, max_length=18)
+    region:      str = Field(default="",   max_length=25)
 
 class ProjectCreate(BaseModel):
     name:        str           = Field(min_length=1, max_length=120)
@@ -58,13 +51,28 @@ class SampleOut(BaseModel):
     class Config: from_attributes = True
 
 class ProjectOut(BaseModel):
-    id:          str
-    name:        str
-    system_type: SystemType
-    manual_only: bool
-    created_at:  datetime
-    samples:     List[SampleOut] = []
-    class Config: from_attributes = True
+    id:             str
+    name:           str
+    system_type:    SystemType
+    manual_only:    bool
+    status:         str = "idle"
+    created_at:     datetime
+    samples:        List[SampleOut] = []
+    owner_username: Optional[str] = None
+
+    @model_validator(mode="after")
+    def populate_owner_username(self) -> "ProjectOut":
+        return self
+
+    class Config:
+        from_attributes = True
+
+    @classmethod
+    def from_orm_with_owner(cls, obj) -> "ProjectOut":
+        instance = cls.model_validate(obj)
+        if hasattr(obj, "owner") and obj.owner:
+            instance.owner_username = obj.owner.username
+        return instance
 
 # ── Sensor readings ───────────────────────────────────────────────────────────
 class ReadingIn(BaseModel):
@@ -95,3 +103,32 @@ class DosingJobOut(BaseModel):
     image_path:    str
     processed_at:  datetime
     class Config: from_attributes = True
+
+# ── Merged projects ───────────────────────────────────────────────────────────
+class MergedProjectCreate(BaseModel):
+    name:         str = Field(min_length=1, max_length=120)
+    project_a_id: str
+    project_b_id: str
+
+class MergedProjectRename(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+class MergedProjectOut(BaseModel):
+    id:             str
+    name:           str
+    project_a_id:   str
+    project_b_id:   str
+    project_a:      Optional[ProjectOut] = None
+    project_b:      Optional[ProjectOut] = None
+    created_at:     datetime
+    owner_username: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+    @classmethod
+    def from_orm_with_owner(cls, obj) -> "MergedProjectOut":
+        instance = cls.model_validate(obj)
+        if hasattr(obj, "owner") and obj.owner:
+            instance.owner_username = obj.owner.username
+        return instance
