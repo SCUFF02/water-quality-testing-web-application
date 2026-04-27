@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { EditModal, ConfirmModal } from "../components/EditModal";
 
 type BackendUser = {
   id:         string;
@@ -44,6 +45,29 @@ export default function AdminPage() {
   const [users, setUsers]       = useState<BackendUser[]>([]);
   const [projects, setProjects] = useState<BackendProject[]>([]);
   const [loading, setLoading]   = useState(true);
+  const [cameraIp, setCameraIp] = useState("");
+
+  // Password change
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [pwModalOpen,  setPwModalOpen]  = useState(false);
+  const [currentPw,    setCurrentPw]    = useState("");
+  const [newPw,        setNewPw]        = useState("");
+  const [pwError,      setPwError]      = useState("");
+  const [pwSuccess,    setPwSuccess]    = useState("");
+
+  // Rename / delete / reset-pw modals
+  const [renameModal,   setRenameModal]   = useState<{ id: string; name: string; systemType: string } | null>(null);
+  const [deleteModal,   setDeleteModal]   = useState<{ id: string; name: string; systemType: string } | null>(null);
+  const [resetPwModal,  setResetPwModal]  = useState<{ id: string; username: string } | null>(null);
+  const [deleteUserModal, setDeleteUserModal] = useState<string | null>(null);
+  const [modalError,    setModalError]    = useState("");
+
+  useEffect(() => {
+    fetch(`${API}/system/settings`)
+      .then(r => r.ok ? r.json() : {})
+      .then(d => { if (d.camera_ip) setCameraIp(d.camera_ip); })
+      .catch(() => {});
+  }, []);
 
   const currentUser = (() => {
     try { return JSON.parse(localStorage.getItem("currentUser") || "{}"); }
@@ -84,6 +108,18 @@ export default function AdminPage() {
     nav("/signin", { replace: true });
   }
 
+  async function changePassword() {
+    setPwError(""); setPwSuccess("");
+    if (!currentPw) { setPwError("Enter your current password."); return; }
+    if (newPw.length < 6) { setPwError("New password must be at least 6 characters."); return; }
+    const res = await apiFetch("/users/me/change-password", { method: "POST", body: JSON.stringify({ current_password: currentPw, new_password: newPw }) });
+    const d = await res.json();
+    if (!res.ok) { setPwError(d.detail || "Could not change password."); return; }
+    setPwSuccess("Password changed successfully.");
+    setCurrentPw(""); setNewPw("");
+    setTimeout(() => { setPwModalOpen(false); setPwSuccess(""); }, 1500);
+  }
+
   async function deleteUser(userId: string) {
     try {
       await apiFetch(`/users/${userId}`, { method: "DELETE" });
@@ -93,47 +129,59 @@ export default function AdminPage() {
   }
 
   async function deleteProject(p: { id: string; name: string; system_type: string }) {
-    if (!window.confirm(`Delete "${p.name}"? This cannot be undone.`)) return;
-    const endpoint = p.system_type === "multisensor" ? `/multisensor/projects/${p.id}` : `/dosing/projects/${p.id}`;
+    setModalError("");
+    setDeleteModal({ id: p.id, name: p.name, systemType: p.system_type });
+  }
+
+  async function doDeleteProject(id: string, systemType: string) {
+    const endpoint = systemType === "multisensor" ? `/multisensor/projects/${id}` : `/dosing/projects/${id}`;
     try {
       await apiFetch(endpoint, { method: "DELETE" });
-      setProjects((prev: any[]) => prev.filter((x: any) => x.id !== p.id));
-    } catch { alert("Could not delete project."); }
+      setProjects((prev: any[]) => prev.filter((x: any) => x.id !== id));
+    } catch { setModalError("Could not delete project."); }
+    setDeleteModal(null);
   }
 
   async function renameProject(p: { id: string; name: string; system_type: string }) {
-    const newName = window.prompt("New project name:", p.name);
-    if (!newName || !newName.trim() || newName.trim() === p.name) return;
-    const endpoint = p.system_type === "multisensor" ? `/multisensor/projects/${p.id}` : `/dosing/projects/${p.id}`;
+    setModalError("");
+    setRenameModal({ id: p.id, name: p.name, systemType: p.system_type });
+  }
+
+  async function doRenameProject(id: string, systemType: string, newName: string) {
+    const endpoint = systemType === "multisensor" ? `/multisensor/projects/${id}` : `/dosing/projects/${id}`;
     try {
-      const res = await apiFetch(endpoint, {
-        method: "PATCH",
-        body: JSON.stringify({ name: newName.trim() }),
-      });
-      if (!res.ok) { const d = await res.json(); alert(d.detail || "Could not rename."); return; }
-      setProjects((prev: any[]) => prev.map((x: any) => x.id === p.id ? { ...x, name: newName.trim() } : x));
-    } catch { alert("Could not connect to server."); }
+      const res = await apiFetch(endpoint, { method: "PATCH", body: JSON.stringify({ name: newName }) });
+      if (!res.ok) { const d = await res.json(); setModalError(d.detail || "Could not rename."); return; }
+      setProjects((prev: any[]) => prev.map((x: any) => x.id === id ? { ...x, name: newName } : x));
+      setRenameModal(null);
+    } catch { setModalError("Could not connect to server."); }
   }
 
   async function deleteMergedProject(p: { id: string; name: string }) {
-    if (!window.confirm(`Delete "${p.name}"? This cannot be undone.`)) return;
+    setModalError("");
+    setDeleteModal({ id: p.id, name: p.name, systemType: "merged" });
+  }
+
+  async function doDeleteMerged(id: string) {
     try {
-      await apiFetch(`/merged/projects/${p.id}`, { method: "DELETE" });
-      setProjects((prev: any[]) => prev.filter((x: any) => x.id !== p.id));
-    } catch { alert("Could not delete merged project."); }
+      await apiFetch(`/merged/projects/${id}`, { method: "DELETE" });
+      setProjects((prev: any[]) => prev.filter((x: any) => x.id !== id));
+    } catch { setModalError("Could not delete merged project."); }
+    setDeleteModal(null);
   }
 
   async function renameMergedProject(p: { id: string; name: string }) {
-    const newName = window.prompt("New name:", p.name);
-    if (!newName || !newName.trim() || newName.trim() === p.name) return;
+    setModalError("");
+    setRenameModal({ id: p.id, name: p.name, systemType: "merged" });
+  }
+
+  async function doRenameMerged(id: string, newName: string) {
     try {
-      const res = await apiFetch(`/merged/projects/${p.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ name: newName.trim() }),
-      });
-      if (!res.ok) { const d = await res.json(); alert(d.detail || "Could not rename."); return; }
-      setProjects((prev: any[]) => prev.map((x: any) => x.id === p.id ? { ...x, name: newName.trim() } : x));
-    } catch { alert("Could not connect to server."); }
+      const res = await apiFetch(`/merged/projects/${id}`, { method: "PATCH", body: JSON.stringify({ name: newName }) });
+      if (!res.ok) { const d = await res.json(); setModalError(d.detail || "Could not rename."); return; }
+      setProjects((prev: any[]) => prev.map((x: any) => x.id === id ? { ...x, name: newName } : x));
+      setRenameModal(null);
+    } catch { setModalError("Could not connect to server."); }
   }
 
   async function setUserRole(userId: string, newRole: "user" | "researcher" | "admin") {
@@ -194,7 +242,30 @@ export default function AdminPage() {
             </svg>
             {currentUser.username}
           </span>
-          <button className="logout-btn" type="button" onClick={logout}>Logout</button>
+          <div className="user-menu-wrap">
+            <button className="user-menu-btn" type="button" onClick={() => setUserMenuOpen(v => !v)}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--ink-3)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+              </svg>
+            </button>
+            {userMenuOpen && (
+              <div className="user-menu-dropdown" style={{ display: "block" }}>
+                <button type="button" onClick={() => { setUserMenuOpen(false); setPwModalOpen(true); setPwError(""); setPwSuccess(""); setCurrentPw(""); setNewPw(""); }}>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                  </svg>
+                  Change password
+                </button>
+                <button type="button" className="user-menu-danger" onClick={logout}>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+                  </svg>
+                  Logout
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -230,6 +301,34 @@ export default function AdminPage() {
                 <div className="admin-stat-card"><div className="admin-stat-label">Total projects</div><div className="admin-stat-value">{stats.totalProjects}</div></div>
                 <div className="admin-stat-card"><div className="admin-stat-label">MultiSensor</div><div className="admin-stat-value" style={{ color: "var(--accent)" }}>{stats.multisensor}</div></div>
                 <div className="admin-stat-card"><div className="admin-stat-label">Dosing</div><div className="admin-stat-value" style={{ color: "var(--green)" }}>{stats.dosing}</div></div>
+              </div>
+
+              {/* Camera IP setting */}
+              <div className="admin-section-card" style={{ marginBottom: 16 }}>
+                <div className="admin-section-header">
+                  <span className="admin-section-title">ESP-CAM Settings</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 8px 8px", overflow: "hidden" }}>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--ink-3)", flexShrink: 0 }}>
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                    <circle cx="12" cy="13" r="4"/>
+                  </svg>
+                  <input type="text" placeholder="e.g. 192.168.1.45"
+                    value={cameraIp}
+                    onChange={e => setCameraIp(e.target.value)}
+                    style={{ flex: 1, minWidth: 0, fontSize: 13, padding: "6px 10px" }} />
+                  <button type="button" className="btn-ghost" style={{ whiteSpace: "nowrap", flexShrink: 0 }} onClick={async () => {
+                    await fetch(`${API}/system/settings`, {
+                      method: "PATCH",
+                      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` },
+                      body: JSON.stringify({ camera_ip: cameraIp.trim() }),
+                    });
+                    alert(cameraIp.trim() ? `Camera IP set to ${cameraIp.trim()}` : "Camera IP cleared");
+                  }}>Save</button>
+                </div>
+                <p style={{ fontSize: 11, color: "var(--ink-3)", margin: "0 8px 4px" }}>
+                  Stream URL: <code style={{ background: "var(--bg)", padding: "1px 5px", borderRadius: 4 }}>http://[IP]/stream</code> — applies to all dosing projects.
+                </p>
               </div>
 
               <div className="admin-section-card">
@@ -328,13 +427,33 @@ export default function AdminPage() {
                             ) : (
                               <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
                                 <button type="button" className="admin-action-btn" onClick={() => nav(`/user/${encodeURIComponent(u.username)}`)}>View profile</button>
+                                {!u.is_approved && (
+                                  <button type="button" className="admin-action-btn admin-promote-btn"
+                                    onClick={async () => {
+                                      try { await apiFetch(`/users/${u.id}/approve`, { method: "PATCH" }); setUsers(prev => prev.map(x => x.id === u.id ? { ...x, is_approved: true } : x)); }
+                                      catch { alert("Could not approve user."); }
+                                    }}>✓ Approve</button>
+                                )}
+                                {u.is_approved && (
+                                  <button type="button" className="admin-action-btn admin-demote-btn"
+                                    onClick={async () => {
+                                      try { await apiFetch(`/users/${u.id}/approve`, { method: "PATCH" }); setUsers(prev => prev.map(x => x.id === u.id ? { ...x, is_approved: false } : x)); }
+                                      catch { alert("Could not revoke approval."); }
+                                    }}>✗ Revoke</button>
+                                )}
                                 {u.role === "user" && <button type="button" className="admin-action-btn admin-promote-btn" onClick={() => setUserRole(u.id, "researcher")}>→ Researcher</button>}
                                 {u.role === "researcher" && <>
                                   <button type="button" className="admin-action-btn admin-demote-btn" onClick={() => setUserRole(u.id, "user")}>→ User</button>
                                   <button type="button" className="admin-action-btn admin-promote-btn" onClick={() => setUserRole(u.id, "admin")}>→ Admin</button>
                                 </>}
                                 {u.role === "admin" && <button type="button" className="admin-action-btn admin-demote-btn" onClick={() => setUserRole(u.id, "researcher")}>→ Researcher</button>}
-                                <button type="button" className="admin-action-btn admin-delete-btn" onClick={() => setConfirmDelete(u.id)}>Delete</button>
+                                <button type="button" className="admin-action-btn admin-delete-btn" onClick={() => setDeleteUserModal(u.id)}>Delete</button>
+                                <button type="button" className="icon-btn" title="Reset password"
+                                  onClick={() => { setModalError(""); setResetPwModal({ id: u.id, username: u.username }); }}>
+                                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>
+                                  </svg>
+                                </button>
                               </div>
                             )}
                           </td>
@@ -407,16 +526,74 @@ export default function AdminPage() {
         </main>
       </div>
 
-      {confirmDelete && (
-        <div className="modal-overlay" onClick={() => setConfirmDelete(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h3>Delete user</h3>
-            <p style={{ textAlign: "center", color: "var(--ink-2)", marginBottom: 20, fontSize: 13 }}>
-              Are you sure you want to delete this user? This cannot be undone.
-            </p>
-            <div className="modal-actions">
-              <button type="button" style={{ background: "var(--danger)", borderColor: "var(--danger)" }} onClick={() => deleteUser(confirmDelete)}>Yes, delete</button>
-              <button type="button" onClick={() => setConfirmDelete(null)}>Cancel</button>
+      {(confirmDelete || deleteUserModal) && (
+        <ConfirmModal
+          title="Delete user"
+          message="Are you sure you want to delete this user? This cannot be undone."
+          confirmLabel="Yes, delete"
+          danger
+          onClose={() => { setConfirmDelete(null); setDeleteUserModal(null); }}
+          onConfirm={() => { const id = confirmDelete || deleteUserModal!; deleteUser(id); setDeleteUserModal(null); }}
+        />
+      )}
+
+      {renameModal && (
+        <EditModal
+          title={`Rename "${renameModal.name}"`}
+          fields={[{ id: "name", label: "New name", defaultValue: renameModal.name, maxLength: 120 }]}
+          error={modalError}
+          onClose={() => { setRenameModal(null); setModalError(""); }}
+          onSave={v => renameModal.systemType === "merged"
+            ? doRenameMerged(renameModal.id, v.name.trim())
+            : doRenameProject(renameModal.id, renameModal.systemType, v.name.trim())}
+        />
+      )}
+
+      {deleteModal && (
+        <ConfirmModal
+          title="Delete project"
+          message={<>Delete <strong>{deleteModal.name}</strong>? This cannot be undone.</>}
+          confirmLabel="Yes, delete"
+          danger
+          onClose={() => { setDeleteModal(null); setModalError(""); }}
+          onConfirm={() => deleteModal.systemType === "merged"
+            ? doDeleteMerged(deleteModal.id)
+            : doDeleteProject(deleteModal.id, deleteModal.systemType)}
+        />
+      )}
+
+      {resetPwModal && (
+        <EditModal
+          title={`Reset password — ${resetPwModal.username}`}
+          fields={[{ id: "pw", label: "New password", type: "password", defaultValue: "", placeholder: "Min. 6 characters" }]}
+          error={modalError}
+          saveLabel="Reset password"
+          onClose={() => { setResetPwModal(null); setModalError(""); }}
+          onSave={async v => {
+            if (v.pw.length < 6) { setModalError("Password must be at least 6 characters."); return; }
+            try {
+              await apiFetch(`/users/${resetPwModal.id}/reset-password`, { method: "POST", body: JSON.stringify({ new_password: v.pw }) });
+              setResetPwModal(null); setModalError("");
+            } catch { setModalError("Could not reset password."); }
+          }}
+        />
+      )}
+
+      {pwModalOpen && (
+        <div className="modal-overlay" onClick={() => setPwModalOpen(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Change password</h3>
+            <label htmlFor="admin-current-pw">Current password</label>
+            <input id="admin-current-pw" type="password" value={currentPw} autoFocus
+              onChange={e => { setCurrentPw(e.target.value); setPwError(""); }} />
+            <label htmlFor="admin-new-pw">New password</label>
+            <input id="admin-new-pw" type="password" value={newPw} placeholder="Min. 6 characters"
+              onChange={e => { setNewPw(e.target.value); setPwError(""); }} />
+            {pwError   && <p className="form-error">{pwError}</p>}
+            {pwSuccess && <p style={{ color: "var(--green)", fontSize: 13, textAlign: "center" }}>{pwSuccess}</p>}
+            <div className="modal-actions" style={{ marginTop: 20 }}>
+              <button type="button" onClick={changePassword}>Save</button>
+              <button type="button" onClick={() => setPwModalOpen(false)}>Cancel</button>
             </div>
           </div>
         </div>

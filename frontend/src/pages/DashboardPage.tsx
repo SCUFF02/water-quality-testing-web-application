@@ -2,7 +2,7 @@ import { useNavigate } from "react-router-dom";
 import { useState, useEffect, useCallback } from "react";
 import MultiSensorForm from "../components/MultiSensorForm";
 import DosingSystemForm from "../components/DosingSystemForm";
-
+import { EditModal, ConfirmModal } from "../components/EditModal";
 import { BASE_URL as API } from "../api/api";
 
 type BackendProject = {
@@ -40,7 +40,12 @@ export default function DashboardPage() {
   const [merged,     setMerged]     = useState<MergedProject[]>([]);
   const [loading,    setLoading]    = useState(true);
   const [error,      setError]      = useState("");
-  const [history, setHistory] = useState<string[]>([]);
+  const [history,    setHistory]    = useState<string[]>([]);
+
+  // Modal state
+  const [renameModal,  setRenameModal]  = useState<{ item: BackendProject | MergedProject; type: "project" | "merged" } | null>(null);
+  const [deleteModal,  setDeleteModal]  = useState<{ item: BackendProject | MergedProject; type: "project" | "merged" } | null>(null);
+  const [modalError,   setModalError]   = useState("");
 
   const currentUser = (() => {
     try { return JSON.parse(localStorage.getItem("currentUser") || "{}"); }
@@ -83,26 +88,29 @@ export default function DashboardPage() {
   }
 
   async function deleteProject(project: BackendProject) {
-    if (!window.confirm(`Delete "${project.name}"? This cannot be undone.`)) return;
+    setDeleteModal({ item: project, type: "project" });
+  }
+
+  async function doDeleteProject(project: BackendProject) {
     const endpoint = project.system_type === "multisensor"
       ? `/multisensor/projects/${project.id}`
       : `/dosing/projects/${project.id}`;
     try {
-      await fetch(`${API}${endpoint}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token()}` },
-      });
+      await fetch(`${API}${endpoint}`, { method: "DELETE", headers: { Authorization: `Bearer ${token()}` } });
       setProjects(prev => prev.filter(p => p.id !== project.id));
       setHistory(prev => [`Deleted project "${project.name}"`, ...prev]);
-    } catch {
-      alert("Could not delete project — make sure the backend is running.");
-    }
+    } catch { setModalError("Could not delete project."); }
+    setDeleteModal(null);
   }
 
   async function renameProject(project: BackendProject) {
-    const newName = window.prompt("Enter new project name:", project.name);
-    if (!newName || !newName.trim() || newName.trim() === project.name) return;
+    setModalError("");
+    setRenameModal({ item: project, type: "project" });
+  }
+
+  async function doRenameProject(project: BackendProject, newName: string) {
     const trimmed = newName.trim();
+    if (!trimmed || trimmed === project.name) { setRenameModal(null); return; }
     const endpoint = project.system_type === "multisensor"
       ? `/multisensor/projects/${project.id}`
       : `/dosing/projects/${project.id}`;
@@ -112,44 +120,45 @@ export default function DashboardPage() {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` },
         body: JSON.stringify({ name: trimmed }),
       });
-      if (!res.ok) {
-        const d = await res.json();
-        alert(d.detail || "Could not rename project.");
-        return;
-      }
+      if (!res.ok) { const d = await res.json(); setModalError(d.detail || "Could not rename."); return; }
       setProjects(prev => prev.map(p => p.id === project.id ? { ...p, name: trimmed } : p));
       setHistory(prev => [`Renamed "${project.name}" to "${trimmed}"`, ...prev]);
-    } catch {
-      alert("Could not connect to server.");
-    }
+      setRenameModal(null);
+    } catch { setModalError("Could not connect to server."); }
   }
 
   async function deleteMerged(m: MergedProject) {
-    if (!window.confirm(`Delete "${m.name}"? This cannot be undone.`)) return;
+    setDeleteModal({ item: m, type: "merged" });
+  }
+
+  async function doDeleteMerged(m: MergedProject) {
     try {
-      await fetch(`${API}/merged/projects/${m.id}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token()}` },
-      });
+      await fetch(`${API}/merged/projects/${m.id}`, { method: "DELETE", headers: { Authorization: `Bearer ${token()}` } });
       setMerged(prev => prev.filter(p => p.id !== m.id));
       setHistory(prev => [`Deleted merged project "${m.name}"`, ...prev]);
-    } catch { alert("Could not delete merged project."); }
+    } catch { setModalError("Could not delete merged project."); }
+    setDeleteModal(null);
   }
 
   async function renameMerged(m: MergedProject) {
-    const newName = window.prompt("Enter new name:", m.name);
-    if (!newName || !newName.trim() || newName.trim() === m.name) return;
+    setModalError("");
+    setRenameModal({ item: m, type: "merged" });
+  }
+
+  async function doRenameMerged(m: MergedProject, newName: string) {
     const trimmed = newName.trim();
+    if (!trimmed || trimmed === m.name) { setRenameModal(null); return; }
     try {
       const res = await fetch(`${API}/merged/projects/${m.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` },
         body: JSON.stringify({ name: trimmed }),
       });
-      if (!res.ok) { const d = await res.json(); alert(d.detail || "Could not rename."); return; }
+      if (!res.ok) { const d = await res.json(); setModalError(d.detail || "Could not rename."); return; }
       setMerged(prev => prev.map(p => p.id === m.id ? { ...p, name: trimmed } : p));
       setHistory(prev => [`Renamed "${m.name}" to "${trimmed}"`, ...prev]);
-    } catch { alert("Could not connect to server."); }
+      setRenameModal(null);
+    } catch { setModalError("Could not connect to server."); }
   }
   const recentProjects   = projects.slice(0, 4);
   const multisensorCount = projects.filter(p => p.system_type === "multisensor").length;
@@ -426,6 +435,31 @@ export default function DashboardPage() {
 
       {multiOpen  && <MultiSensorForm  onClose={() => setMultiOpen(false)}  projects={projects.map(p => p.name)} />}
       {dosingOpen && <DosingSystemForm onClose={() => setDosingOpen(false)} projects={projects.map(p => p.name)} />}
+
+      {renameModal && (
+        <EditModal
+          title={`Rename "${renameModal.item.name}"`}
+          fields={[{ id: "name", label: "New name", defaultValue: renameModal.item.name, maxLength: 120 }]}
+          error={modalError}
+          onClose={() => { setRenameModal(null); setModalError(""); }}
+          onSave={v => renameModal.type === "project"
+            ? doRenameProject(renameModal.item as BackendProject, v.name)
+            : doRenameMerged(renameModal.item as MergedProject, v.name)}
+        />
+      )}
+
+      {deleteModal && (
+        <ConfirmModal
+          title="Delete project"
+          message={<>Delete <strong>{deleteModal.item.name}</strong>? This cannot be undone.</>}
+          confirmLabel="Yes, delete"
+          danger
+          onClose={() => setDeleteModal(null)}
+          onConfirm={() => deleteModal.type === "project"
+            ? doDeleteProject(deleteModal.item as BackendProject)
+            : doDeleteMerged(deleteModal.item as MergedProject)}
+        />
+      )}
     </div>
   );
 }

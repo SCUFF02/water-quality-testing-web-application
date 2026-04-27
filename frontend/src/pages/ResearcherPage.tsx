@@ -12,7 +12,7 @@ type BackendUser = {
 type BackendProject = {
   id: string;
   name: string;
-  system_type: "multisensor" | "dosing";
+  system_type: "multisensor" | "dosing" | "merged";
   created_at: string;
   user_id: string;
   samples: { id: string; sample_name: string; region: string }[];

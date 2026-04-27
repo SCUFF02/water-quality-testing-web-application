@@ -1,6 +1,7 @@
 import { api } from "../api/api";
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { EditModal, ConfirmModal } from "../components/EditModal";
 
 /**
  * Profile Page
@@ -43,8 +44,21 @@ export default function ProfilePage() {
   const [backendDosing, setBackendDosing]           = useState<BackendProject[]>([]);
   const [loading, setLoading]                       = useState(true);
 
-  // Merged projects stay in localStorage (they're local combinations)
+  // Merged projects
   const [mergedProjects, setMergedProjects] = useState<BackendMerged[]>([]);
+
+  // Password change
+  const [pwModalOpen, setPwModalOpen]   = useState(false);
+  const [currentPw,   setCurrentPw]     = useState("");
+  const [newPw,       setNewPw]         = useState("");
+  const [pwError,     setPwError]       = useState("");
+  const [pwSuccess,   setPwSuccess]     = useState("");
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+
+  // Rename/delete modals
+  const [renameModal,  setRenameModal]  = useState<{ id: string; name: string; type: "project" | "merged"; systemType?: string } | null>(null);
+  const [deleteModal,  setDeleteModal]  = useState<{ id: string; name: string; type: "project" | "merged"; systemType?: string } | null>(null);
+  const [modalError,   setModalError]   = useState("");
 
   // Load merged projects from backend
   useEffect(() => {
@@ -85,6 +99,47 @@ export default function ProfilePage() {
     localStorage.removeItem("token");
     localStorage.removeItem("currentUser");
     nav("/signin", { replace: true });
+  }
+
+  async function changePassword() {
+    setPwError(""); setPwSuccess("");
+    if (!currentPw) { setPwError("Enter your current password."); return; }
+    if (newPw.length < 6) { setPwError("New password must be at least 6 characters."); return; }
+    const res = await api.post("/users/me/change-password", { current_password: currentPw, new_password: newPw });
+    const d = await res.json();
+    if (!res.ok) { setPwError(d.detail || "Could not change password."); return; }
+    setPwSuccess("Password changed successfully.");
+    setCurrentPw(""); setNewPw("");
+    setTimeout(() => { setPwModalOpen(false); setPwSuccess(""); }, 1500);
+  }
+
+  async function renameProject(p: BackendProject, e: React.MouseEvent) {
+    e.stopPropagation();
+    setModalError("");
+    setRenameModal({ id: p.id, name: p.name, type: "project", systemType: p.system_type });
+  }
+
+  async function deleteProject(p: BackendProject, e: React.MouseEvent) {
+    e.stopPropagation();
+    setDeleteModal({ id: p.id, name: p.name, type: "project", systemType: p.system_type });
+  }
+
+  async function doRenameProject(id: string, _name: string, systemType: string, newName: string) {
+    const endpoint = systemType === "multisensor" ? `/multisensor/projects/${id}` : `/dosing/projects/${id}`;
+    const res = await api.patch(endpoint, { name: newName });
+    if (!res.ok) { const d = await res.json(); setModalError(d.detail || "Could not rename."); return; }
+    if (systemType === "multisensor") setBackendMultisensor(prev => prev.map(x => x.id === id ? { ...x, name: newName } : x));
+    else setBackendDosing(prev => prev.map(x => x.id === id ? { ...x, name: newName } : x));
+    setRenameModal(null);
+  }
+
+  async function doDeleteProject(id: string, _name: string, systemType: string) {
+    const endpoint = systemType === "multisensor" ? `/multisensor/projects/${id}` : `/dosing/projects/${id}`;
+    const res = await api.del(endpoint);
+    if (!res.ok) { setModalError("Could not delete project."); return; }
+    if (systemType === "multisensor") setBackendMultisensor(prev => prev.filter(x => x.id !== id));
+    else setBackendDosing(prev => prev.filter(x => x.id !== id));
+    setDeleteModal(null);
   }
 
   function formatDate(ts: string) {
@@ -158,19 +213,27 @@ export default function ProfilePage() {
 
   async function renameMerged(p: BackendMerged, e: React.MouseEvent) {
     e.stopPropagation();
-    const newName = window.prompt("New name:", p.name);
-    if (!newName || !newName.trim() || newName.trim() === p.name) return;
-    const res = await api.patch(`/merged/projects/${p.id}`, { name: newName.trim() });
-    if (!res.ok) { const d = await res.json(); alert(d.detail || "Could not rename."); return; }
-    setMergedProjects(prev => prev.map(m => m.id === p.id ? { ...m, name: newName.trim() } : m));
+    setModalError("");
+    setRenameModal({ id: p.id, name: p.name, type: "merged" });
   }
 
   async function deleteMerged(p: BackendMerged, e: React.MouseEvent) {
     e.stopPropagation();
-    if (!window.confirm(`Delete "${p.name}"? This cannot be undone.`)) return;
-    const res = await api.del(`/merged/projects/${p.id}`);
-    if (!res.ok) { alert("Could not delete."); return; }
-    setMergedProjects(prev => prev.filter(m => m.id !== p.id));
+    setDeleteModal({ id: p.id, name: p.name, type: "merged" });
+  }
+
+  async function doRenameMerged(id: string, newName: string) {
+    const res = await api.patch(`/merged/projects/${id}`, { name: newName });
+    if (!res.ok) { const d = await res.json(); setModalError(d.detail || "Could not rename."); return; }
+    setMergedProjects(prev => prev.map(m => m.id === id ? { ...m, name: newName } : m));
+    setRenameModal(null);
+  }
+
+  async function doDeleteMerged(id: string) {
+    const res = await api.del(`/merged/projects/${id}`);
+    if (!res.ok) { setModalError("Could not delete."); return; }
+    setMergedProjects(prev => prev.filter(m => m.id !== id));
+    setDeleteModal(null);
   }
 
   return (
@@ -184,7 +247,30 @@ export default function ProfilePage() {
           <button type="button" className="back-btn" onClick={() => nav("/app")}>← Dashboard</button>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <button className="logout-btn" type="button" onClick={logout}>Logout</button>
+          <div className="user-menu-wrap">
+            <button className="user-menu-btn" type="button" onClick={() => setUserMenuOpen(v => !v)}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--ink-3)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+              </svg>
+            </button>
+            {userMenuOpen && (
+              <div className="user-menu-dropdown" style={{ display: "block" }}>
+                <button type="button" onClick={() => { setUserMenuOpen(false); setPwModalOpen(true); setPwError(""); setPwSuccess(""); setCurrentPw(""); setNewPw(""); }}>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                  </svg>
+                  Change password
+                </button>
+                <button type="button" className="user-menu-danger" onClick={logout}>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+                  </svg>
+                  Logout
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -255,11 +341,27 @@ export default function ProfilePage() {
                     onClick={() => nav(`/project/${encodeURIComponent(p.id)}`)}>
                     <div className="card-top">
                       <span className="card-type-badge multisensor">MultiSensor</span>
-                      <span className="card-date">{formatDate(p.created_at)}</span>
+                      <div className="project-actions" style={{ marginLeft: "auto" }} onClick={e => e.stopPropagation()}>
+                        <button type="button" className="icon-btn rename-btn" title="Rename" onClick={e => renameProject(p, e)}>
+                          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                          </svg>
+                        </button>
+                        <button type="button" className="icon-btn delete-btn" title="Delete" onClick={e => deleteProject(p, e)}>
+                          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="3 6 5 6 21 6"/>
+                            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                            <path d="M10 11v6"/><path d="M14 11v6"/>
+                            <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                          </svg>
+                        </button>
+                      </div>
                     </div>
                     <div className="card-name">{p.name}</div>
-                    <div className="card-meta">
-                      {p.samples.length > 0 ? `${p.samples.length} sample${p.samples.length !== 1 ? "s" : ""}` : "—"}
+                    <div className="card-bottom">
+                      <span className="card-meta">{p.samples.length > 0 ? `${p.samples.length} sample${p.samples.length !== 1 ? "s" : ""}` : "—"}</span>
+                      <span className="card-date">{formatDate(p.created_at)}</span>
                     </div>
                   </div>
                 ))}
@@ -283,10 +385,28 @@ export default function ProfilePage() {
                     onClick={() => nav(`/project/${encodeURIComponent(p.id)}`)}>
                     <div className="card-top">
                       <span className="card-type-badge dosing">Dosing</span>
-                      <span className="card-date">{formatDate(p.created_at)}</span>
+                      <div className="project-actions" style={{ marginLeft: "auto" }} onClick={e => e.stopPropagation()}>
+                        <button type="button" className="icon-btn rename-btn" title="Rename" onClick={e => renameProject(p, e)}>
+                          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                          </svg>
+                        </button>
+                        <button type="button" className="icon-btn delete-btn" title="Delete" onClick={e => deleteProject(p, e)}>
+                          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="3 6 5 6 21 6"/>
+                            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                            <path d="M10 11v6"/><path d="M14 11v6"/>
+                            <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                          </svg>
+                        </button>
+                      </div>
                     </div>
                     <div className="card-name">{p.name}</div>
-                    <div className="card-meta">{p.samples.length > 0 ? `${p.samples.length} source${p.samples.length !== 1 ? "s" : ""}` : "—"}</div>
+                    <div className="card-bottom">
+                      <span className="card-meta">{p.samples.length > 0 ? `${p.samples.length} source${p.samples.length !== 1 ? "s" : ""}` : "—"}</span>
+                      <span className="card-date">{formatDate(p.created_at)}</span>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -326,7 +446,6 @@ export default function ProfilePage() {
                     onClick={() => nav(`/merged-project/${encodeURIComponent((p as BackendMerged).id)}`)}>
                     <div className="card-top">
                       <span className="card-type-badge merged">Merged</span>
-                      <span className="card-date">{formatDate((p as BackendMerged).created_at)}</span>
                       <div className="project-actions" style={{ marginLeft: "auto" }} onClick={e => e.stopPropagation()}>
                         <button type="button" className="icon-btn rename-btn" title="Rename" onClick={e => renameMerged(p, e)}>
                           <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -345,15 +464,10 @@ export default function ProfilePage() {
                       </div>
                     </div>
                     <div className="card-name">{(p as BackendMerged).name}</div>
-                    {p.mergedFrom && (
-                      <div className="card-merged-from">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
-                          <path d="M18 9a9 9 0 0 1-9 9"/>
-                        </svg>
-                        {p.mergedFrom[0]} + {p.mergedFrom[1]}
-                      </div>
-                    )}
+                    <div className="card-bottom">
+                      <span />
+                      <span className="card-date">{formatDate((p as BackendMerged).created_at)}</span>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -417,6 +531,52 @@ export default function ProfilePage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* PASSWORD CHANGE MODAL */}
+      {pwModalOpen && (
+        <div className="modal-overlay" onClick={() => setPwModalOpen(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Change password</h3>
+            <label htmlFor="current-pw">Current password</label>
+            <input id="current-pw" type="password" value={currentPw} autoFocus
+              onChange={e => { setCurrentPw(e.target.value); setPwError(""); }} />
+            <label htmlFor="new-pw">New password</label>
+            <input id="new-pw" type="password" value={newPw} placeholder="Min. 6 characters"
+              onChange={e => { setNewPw(e.target.value); setPwError(""); }} />
+            {pwError   && <p className="form-error">{pwError}</p>}
+            {pwSuccess && <p style={{ color: "var(--green)", fontSize: 13, textAlign: "center" }}>{pwSuccess}</p>}
+            <div className="modal-actions" style={{ marginTop: 20 }}>
+              <button type="button" onClick={changePassword}>Save</button>
+              <button type="button" onClick={() => setPwModalOpen(false)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {renameModal && (
+        <EditModal
+          title={`Rename "${renameModal.name}"`}
+          fields={[{ id: "name", label: "New name", defaultValue: renameModal.name, maxLength: 120 }]}
+          error={modalError}
+          onClose={() => { setRenameModal(null); setModalError(""); }}
+          onSave={v => renameModal.type === "project"
+            ? doRenameProject(renameModal.id, renameModal.name, renameModal.systemType!, v.name.trim())
+            : doRenameMerged(renameModal.id, v.name.trim())}
+        />
+      )}
+
+      {deleteModal && (
+        <ConfirmModal
+          title="Delete project"
+          message={<>Delete <strong>{deleteModal.name}</strong>? This cannot be undone.</>}
+          confirmLabel="Yes, delete"
+          danger
+          onClose={() => { setDeleteModal(null); setModalError(""); }}
+          onConfirm={() => deleteModal.type === "project"
+            ? doDeleteProject(deleteModal.id, deleteModal.name, deleteModal.systemType!)
+            : doDeleteMerged(deleteModal.id)}
+        />
       )}
     </div>
   );

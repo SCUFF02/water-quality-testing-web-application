@@ -24,12 +24,13 @@ class SystemType(str, enum.Enum):
 # ── Users ────────────────────────────────────────────────────────────────────
 class User(Base):
     __tablename__ = "users"
-    id         = Column(String(36),  primary_key=True, default=gen_uuid)
-    username   = Column(String(80),  unique=True, nullable=False, index=True)
-    email      = Column(String(120), unique=True, nullable=False, index=True)
-    hashed_pw  = Column(String(255), nullable=False)
-    role       = Column(Enum(UserRole), default=UserRole.user, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    id          = Column(String(36),  primary_key=True, default=gen_uuid)
+    username    = Column(String(80),  unique=True, nullable=False, index=True)
+    email       = Column(String(120), unique=True, nullable=False, index=True)
+    hashed_pw   = Column(String(255), nullable=False)
+    role        = Column(Enum(UserRole), default=UserRole.user, nullable=False)
+    is_approved = Column(Boolean, default=False, nullable=False)
+    created_at  = Column(DateTime, default=datetime.utcnow)
 
     projects = relationship("Project", back_populates="owner", cascade="all, delete")
 
@@ -42,6 +43,7 @@ class Project(Base):
     user_id     = Column(String(36),  ForeignKey("users.id"), nullable=False)
     manual_only = Column(Boolean, default=False)
     status      = Column(String(20), default="idle")
+    camera_ip   = Column(String(100), nullable=True, default=None)
     created_at  = Column(DateTime, default=datetime.utcnow)
 
     owner      = relationship("User",         back_populates="projects")
@@ -81,7 +83,8 @@ class DosingJob(Base):
     id            = Column(String(36),  primary_key=True, default=gen_uuid)
     project_id    = Column(String(36),  ForeignKey("projects.id"), nullable=False)
     source_name   = Column(String(120), default="")
-    image_path    = Column(String(255), default="")
+    image_path    = Column(String(255), default="")   # "before" image
+    image_path_after = Column(String(255), default="", nullable=True)  # "after" image
     liquid        = Column(String(80),  default="")
     volume_ml     = Column(Float,       nullable=True)
     moles         = Column(Float,       nullable=True)

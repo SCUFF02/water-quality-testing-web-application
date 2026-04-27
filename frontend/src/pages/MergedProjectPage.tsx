@@ -1,5 +1,6 @@
 import { useMemo, useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
+import { EditModal, ConfirmModal } from "../components/EditModal";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type DataPoint = {
@@ -239,20 +240,27 @@ export default function MergedProjectPage() {
   const [confirmDeleteSample, setConfirmDeleteSample] = useState<{name: string; id: string; projectId: string} | null>(null);
 
   async function renameSample(sampleName: string, sampleId: string, projectId: string, currentRegion: string) {
-    const newName = window.prompt("New sample name (max 18 chars):", sampleName);
-    if (!newName || !newName.trim() || newName.trim() === sampleName) return;
-    if (newName.trim().length > 18) { alert("Sample name must be 18 characters or fewer."); return; }
-    const newRegion = window.prompt("New region (leave blank to keep current):", currentRegion) ?? currentRegion;
+    setMergeSampleError("");
+    setEditSampleForMerge({ sampleName, sampleId, projectId, currentRegion });
+  }
+
+  const [editSampleForMerge, setEditSampleForMerge] = useState<{ sampleName: string; sampleId: string; projectId: string; currentRegion: string } | null>(null);
+  const [mergeSampleError, setMergeSampleError] = useState("");
+
+  async function doRenameSample(newName: string, newRegion: string) {
+    if (!editSampleForMerge) return;
+    const { sampleName, sampleId, projectId } = editSampleForMerge;
     try {
       const res = await fetch(`${API}/multisensor/${projectId}/samples/${sampleId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` },
         body: JSON.stringify({ sample_name: newName.trim(), region: newRegion }),
       });
-      if (!res.ok) { alert("Could not rename sample."); return; }
+      if (!res.ok) { setMergeSampleError("Could not rename sample."); return; }
       if (selectedSample === sampleName) setSelectedSample(newName.trim());
+      setEditSampleForMerge(null);
       await load();
-    } catch { alert("Could not connect to server."); }
+    } catch { setMergeSampleError("Could not connect to server."); }
   }
 
   async function deleteSampleById(sampleName: string, sampleId: string, projectId: string) {
@@ -732,23 +740,28 @@ export default function MergedProjectPage() {
         </main>
       </div>
 
+      {editSampleForMerge && (
+        <EditModal
+          title={`Edit sample — ${editSampleForMerge.sampleName}`}
+          fields={[
+            { id: "name", label: "Sample name", defaultValue: editSampleForMerge.sampleName, maxLength: 18 },
+            { id: "region", label: "Region", defaultValue: editSampleForMerge.currentRegion, maxLength: 25, placeholder: "e.g. North Zone" },
+          ]}
+          error={mergeSampleError}
+          onClose={() => { setEditSampleForMerge(null); setMergeSampleError(""); }}
+          onSave={v => doRenameSample(v.name, v.region)}
+        />
+      )}
+
       {confirmDeleteSample && (
-        <div className="modal-overlay" onClick={() => setConfirmDeleteSample(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <h3>Delete sample</h3>
-            <p style={{ textAlign: "center", color: "var(--ink-2)", fontSize: 13, margin: "0 0 20px" }}>
-              Delete <strong>{confirmDeleteSample.name}</strong>?<br/>
-              <span style={{ color: "var(--ink-3)", fontSize: 12 }}>This will remove the sample and all its data. This cannot be undone.</span>
-            </p>
-            <div className="modal-actions">
-              <button type="button" style={{ background: "var(--danger)", borderColor: "var(--danger)" }}
-                onClick={() => deleteSampleById(confirmDeleteSample.name, confirmDeleteSample.id, confirmDeleteSample.projectId)}>
-                Yes, delete
-              </button>
-              <button type="button" onClick={() => setConfirmDeleteSample(null)}>Cancel</button>
-            </div>
-          </div>
-        </div>
+        <ConfirmModal
+          title="Delete sample"
+          message={<>Delete <strong>{confirmDeleteSample.name}</strong>? This will remove the sample and all its data.</>}
+          confirmLabel="Yes, delete"
+          danger
+          onClose={() => setConfirmDeleteSample(null)}
+          onConfirm={() => deleteSampleById(confirmDeleteSample.name, confirmDeleteSample.id, confirmDeleteSample.projectId)}
+        />
       )}
     </div>
   );

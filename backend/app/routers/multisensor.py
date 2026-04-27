@@ -101,6 +101,33 @@ def get_project_info_device(project_id: str, x_api_key: str = Header(...), db: S
         ]
     }
 
+@router.patch("/{project_id}/readings/{reading_id}", response_model=ReadingOut)
+def update_reading(project_id: str, reading_id: str, body: ReadingIn,
+                   db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    q = db.query(SensorReading).join(Project).filter(SensorReading.id == reading_id)
+    if current_user.role not in ("admin", "researcher"):
+        q = q.filter(Project.user_id == current_user.id)
+    reading = q.first()
+    if not reading: raise HTTPException(404, "Reading not found")
+    reading.parameter = body.parameter
+    reading.value     = body.value
+    reading.unit      = body.unit
+    reading.source    = body.source
+    db.commit()
+    db.refresh(reading)
+    return reading
+
+@router.delete("/{project_id}/readings/{reading_id}")
+def delete_reading(project_id: str, reading_id: str,
+                   db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    q = db.query(SensorReading).join(Project).filter(SensorReading.id == reading_id)
+    if current_user.role not in ("admin", "researcher"):
+        q = q.filter(Project.user_id == current_user.id)
+    reading = q.first()
+    if not reading: raise HTTPException(404, "Reading not found")
+    db.delete(reading); db.commit()
+    return {"deleted": reading_id}
+
 @router.post("/{project_id}/readings", response_model=ReadingOut)
 def add_reading(project_id: str, body: ReadingIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     q = db.query(Project).filter(Project.id == project_id)

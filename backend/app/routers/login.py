@@ -30,15 +30,11 @@ def register(body: UserCreate, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=Token)
 def login(body: LoginRequest, db: Session = Depends(get_db)):
-    """
-    Log in with email + password.
-    Returns a JWT token that the frontend stores and sends with every request.
-    The token contains: user id, role, and username.
-    """
     user = db.query(User).filter(User.email == body.email).first()
     if not user or not verify_password(body.password, user.hashed_pw):
         raise HTTPException(401, "Invalid credentials")
-    # Include username in the token so the frontend can read it without another API call
+    if not user.is_approved:
+        raise HTTPException(403, "Your account is pending admin approval. Please wait.")
     token = create_access_token({
         "sub":      user.id,
         "role":     user.role,

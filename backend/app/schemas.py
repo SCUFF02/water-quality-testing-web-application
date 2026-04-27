@@ -18,11 +18,12 @@ class UserCreate(BaseModel):
         return v
 
 class UserOut(BaseModel):
-    id:         str
-    username:   str
-    email:      str
-    role:       UserRole
-    created_at: datetime
+    id:          str
+    username:    str
+    email:       str
+    role:        UserRole
+    is_approved: bool = False
+    created_at:  datetime
     class Config: from_attributes = True
 
 class Token(BaseModel):
@@ -56,6 +57,7 @@ class ProjectOut(BaseModel):
     system_type:    SystemType
     manual_only:    bool
     status:         str = "idle"
+    camera_ip:      Optional[str] = None
     created_at:     datetime
     samples:        List[SampleOut] = []
     owner_username: Optional[str] = None

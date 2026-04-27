@@ -80,13 +80,13 @@ export default function AppRouter() {
         <Route path="/signin" element={<SignInPage />} />
         <Route path="/signup" element={<SignUpPage />} />
 
-        {/* User + Researcher routes */}
+        {/* User + Researcher + Admin routes */}
         <Route path="/app"
           element={<UserRoute><DashboardPage /></UserRoute>} />
         <Route path="/project/:id"
-          element={<UserRoute><ProjectDataPage /></UserRoute>} />
+          element={<AnyAuthRoute><ProjectDataPage /></AnyAuthRoute>} />
         <Route path="/profile"
-          element={<UserRoute><ProfilePage /></UserRoute>} />
+          element={<AnyAuthRoute><ProfilePage /></AnyAuthRoute>} />
 
         {/* Researcher only */}
         <Route path="/browse"

@@ -1292,6 +1292,14 @@ label {
 .card-date { font-size: 11px; color: var(--ink-3); font-family: var(--mono); }
 .card-name { font-size: 13.5px; font-weight: 600; color: var(--ink); margin-bottom: 4px; line-height: 1.3; }
 .card-meta { font-size: 12px; color: var(--ink-3); }
+.profile-project-card {
+  padding: 14px 16px;
+  border-radius: var(--r-lg);
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-xs);
+}
+.card-bottom { display: flex; align-items: center; justify-content: space-between; margin-top: auto; padding-top: 8px; }
 
 .card-type-badge {
   display: inline-block;
@@ -2561,3 +2569,40 @@ label {
   font-weight: 700;
   margin-top: 2px;
 }
+
+/* ── User menu dropdown ───────────────────────────────────────────────────── */
+.user-menu-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.user-menu-btn {
+  display: flex; align-items: center; gap: 7px;
+  background: transparent; border: 1px solid var(--line);
+  border-radius: 8px; padding: 6px 12px;
+  font-size: 13px; font-weight: 500; color: var(--ink-3);
+  cursor: pointer; transition: background 0.15s, border-color 0.15s;
+}
+.user-menu-btn:hover { background: #e8f0fe; border-color: var(--accent-border); }
+.user-menu-btn .avatar-circle {
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent); color: #fff; border-radius: 50%;
+  font-weight: 700; flex-shrink: 0;
+}
+.user-menu-dropdown {
+  position: absolute; top: calc(100% + 6px); right: 0;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 10px; box-shadow: var(--shadow-md);
+  min-width: 170px; z-index: 100; overflow: hidden;
+}
+.user-menu-wrap:hover .user-menu-dropdown { display: block; }
+.user-menu-dropdown button {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 10px 14px;
+  background: none; border: none;
+  font-size: 13px; color: var(--ink-1);
+  cursor: pointer; text-align: left;
+  transition: background 0.12s;
+}
+.user-menu-dropdown button:hover { background: #e8f0fe; }
+.user-menu-dropdown .user-menu-danger { color: var(--danger); }
+.user-menu-dropdown .user-menu-danger:hover { background: var(--danger-subtle); }

@@ -1,5 +1,6 @@
 import { useMemo, useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
+import { EditModal, ConfirmModal } from "../components/EditModal";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type DataPoint = {
@@ -14,8 +15,15 @@ type BackendProject = {
   system_type: "multisensor" | "dosing";
   created_at: string; manual_only: boolean;
   status?: "idle" | "active";
+  camera_ip?: string;
   owner_username?: string;
   samples: { id: string; sample_name: string; region: string }[];
+};
+
+type DosingJob = {
+  id: string; source_name: string; liquid: string;
+  volume_ml: number | null; moles: number | null; concentration: number | null;
+  image_path: string; image_path_after?: string; processed_at: string;
 };
 
 type BackendReading = {
@@ -334,6 +342,7 @@ export default function ProjectDataPage() {
   // Backend project data
   const [project,    setProject]    = useState<BackendProject | null>(null);
   const [readings,   setReadings]   = useState<BackendReading[]>([]);
+  const [dosingJobs, setDosingJobs] = useState<DosingJob[]>([]);
   const [loading,    setLoading]    = useState(true);
   const [notFound,   setNotFound]   = useState(false);
 
@@ -354,6 +363,31 @@ export default function ProjectDataPage() {
   const [confirmDeleteSample, setConfirmDeleteSample] = useState<string | null>(null);
   const [projectStatus, setProjectStatus] = useState<"idle" | "active">("idle");
   const [statusLoading, setStatusLoading] = useState(false);
+
+  // Edit sample modal
+  const [editSampleModal, setEditSampleModal] = useState<{id: string; name: string; region: string} | null>(null);
+  const [editSampleName, setEditSampleName] = useState("");
+  const [editSampleRegion, setEditSampleRegion] = useState("");
+  const [editSampleError, setEditSampleError] = useState("");
+
+  // Dosing job view modal
+  const [viewJobModal, setViewJobModal] = useState<DosingJob | null>(null);
+  const [editJobVolume, setEditJobVolume] = useState("");
+
+  // Reading edit/delete modals
+  const [editReadingModal, setEditReadingModal] = useState<BackendReading | null>(null);
+  const [deleteReadingModal, setDeleteReadingModal] = useState<BackendReading | null>(null);
+  const [readingModalError, setReadingModalError] = useState("");
+
+  // Global camera IP
+  const [cameraIp, setCameraIp] = useState("");
+
+  useEffect(() => {
+    fetch(`${API}/system/settings`)
+      .then(r => r.ok ? r.json() : {} as { camera_ip?: string })
+      .then((d: { camera_ip?: string }) => { if (d.camera_ip) setCameraIp(d.camera_ip); })
+      .catch(() => {});
+  }, []);
 
   // ── Anomaly detection ─────────────────────────────────────────────────────
   const [anomalies,     setAnomalies]     = useState<AnomalyMsg[]>([]);
@@ -380,21 +414,19 @@ export default function ProjectDataPage() {
     setLoadError("");
     try {
       let proj: BackendProject | null = null;
-      let systemType: "multisensor" | "dosing" = "multisensor";
 
       const msRes = await fetch(`${API}/multisensor/projects/${projectId}`, {
         headers: { Authorization: `Bearer ${token()}` }
       });
       if (msRes.ok) {
         proj = await msRes.json();
-        systemType = "multisensor";
       } else if (msRes.status !== 404) {
         setLoadError("Could not load project — server error.");
       } else {
         const dosRes = await fetch(`${API}/dosing/projects/${projectId}`, {
           headers: { Authorization: `Bearer ${token()}` }
         });
-        if (dosRes.ok) { proj = await dosRes.json(); systemType = "dosing"; }
+        if (dosRes.ok) { proj = await dosRes.json(); }
         else if (dosRes.status === 404) { setNotFound(true); setLoading(false); return; }
         else setLoadError("Could not load project — server error.");
       }
@@ -417,6 +449,17 @@ export default function ProjectDataPage() {
         page++;
       }
       setReadings(allReadings);
+
+      // Fetch dosing jobs if dosing project
+      if (proj.system_type === "dosing") {
+        const jRes = await fetch(`${API}/dosing/${projectId}/jobs?per_page=200`, {
+          headers: { Authorization: `Bearer ${token()}` }
+        });
+        if (jRes.ok) {
+          const jData = await jRes.json();
+          setDosingJobs(jData.items || []);
+        }
+      }
     } catch {
       setLoadError("Could not connect to server. Make sure the backend is running.");
     }
@@ -505,23 +548,36 @@ export default function ProjectDataPage() {
   }
 
   // ── Rename sample ─────────────────────────────────────────────────────────
-  async function renameSample(sampleName: string) {
+  function openEditSample(sampleName: string) {
     const sample = project?.samples.find(s => s.sample_name === sampleName);
-    if (!sample?.id) return;
-    const newName = window.prompt("New sample name (max 18 chars):", sampleName);
-    if (!newName || !newName.trim() || newName.trim() === sampleName) return;
-    if (newName.trim().length > 18) { alert("Sample name must be 18 characters or fewer."); return; }
-    const newRegion = window.prompt("New region (leave blank to keep current):", sample.region) ?? sample.region;
+    if (!sample) return;
+    setEditSampleModal({ id: sample.id, name: sample.sample_name, region: sample.region });
+    setEditSampleName(sample.sample_name);
+    setEditSampleRegion(sample.region);
+    setEditSampleError("");
+  }
+
+  async function submitEditSample(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editSampleModal) return;
+    if (!editSampleName.trim()) { setEditSampleError("Sample name is required."); return; }
+    if (editSampleName.trim().length > 18) { setEditSampleError("Max 18 characters."); return; }
+    if (editSampleRegion.length > 25) { setEditSampleError("Region max 25 characters."); return; }
     try {
-      const res = await fetch(`${API}/multisensor/${projectId}/samples/${sample.id}`, {
+      const res = await fetch(`${API}/multisensor/${projectId}/samples/${editSampleModal.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` },
-        body: JSON.stringify({ sample_name: newName.trim(), region: newRegion }),
+        body: JSON.stringify({ sample_name: editSampleName.trim(), region: editSampleRegion }),
       });
-      if (!res.ok) { alert("Could not rename sample."); return; }
-      if (selectedSample === sampleName) setSelectedSample(newName.trim());
+      if (!res.ok) { setEditSampleError("Could not update sample."); return; }
+      if (selectedSample === editSampleModal.name) setSelectedSample(editSampleName.trim());
+      setEditSampleModal(null);
       await loadData();
-    } catch { alert("Could not connect to server."); }
+    } catch { setEditSampleError("Could not connect to server."); }
+  }
+
+  async function renameSample(sampleName: string) {
+    openEditSample(sampleName);
   }
 
   // ── Export (use backend endpoints) ───────────────────────────────────────
@@ -784,41 +840,81 @@ export default function ProjectDataPage() {
               {project.system_type === "dosing" ? "Dosing System" : "MultiSensor System"}
             </div>
 
+            {/* Live camera feed — shared device */}
+            {project.system_type === "dosing" && (
+              <div style={{ marginTop: 10 }}>
+                <div className="info-section-title">ESP-CAM Live Feed</div>
+                {cameraIp && projectStatus === "active" ? (
+                  <div style={{ marginTop: 6 }}>
+                    <img
+                      src={`http://${cameraIp}/stream`}
+                      alt="Live feed"
+                      style={{ width: "100%", borderRadius: 8, border: "1px solid var(--line)" }}
+                      onError={e => { (e.target as HTMLImageElement).style.display = "none"; }}
+                    />
+                    <p style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 4, textAlign: "center" }}>
+                      Live — {cameraIp}
+                    </p>
+                  </div>
+                ) : (
+                  <p style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 4 }}>
+                    {cameraIp ? "Start collection to see live feed" : "Camera IP not configured"}
+                  </p>
+                )}
+              </div>
+            )}
+
             {project.system_type === "dosing" && (
               <>
                 <div className="info-section-title">
                   {project.samples.length} Source{project.samples.length !== 1 ? "s" : ""}
                 </div>
                 <ul className="info-list">
-                  {project.samples.map((s, i) => (
-                    <li key={i} className="info-sample-item">
-                      <div className="info-sample-header">
-                        <span className="info-list-index">#{i + 1}</span>
-                        <span className="info-sample-name">{s.sample_name || "—"}</span>
-                      </div>
-                      <div className="info-sample-region">{s.region || "—"}</div>
-                      <div className="info-sample-actions">
-                        <button type="button" className="icon-btn rename-btn"
-                          title={`Rename ${s.sample_name}`}
-                          onClick={() => renameSample(s.sample_name)}>
-                          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                          </svg>
-                        </button>
-                        <button type="button" className="icon-btn delete-btn"
-                          title={`Delete ${s.sample_name}`}
-                          onClick={() => setConfirmDeleteSample(s.sample_name)}>
-                          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <polyline points="3 6 5 6 21 6"/>
-                            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                            <path d="M10 11v6"/><path d="M14 11v6"/>
-                            <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-                          </svg>
-                        </button>
-                      </div>
-                    </li>
-                  ))}
+                  {project.samples.map((s, i) => {
+                    const job = dosingJobs.find(j => j.source_name === s.sample_name);
+                    return (
+                      <li key={i} className="info-sample-item">
+                        <div className="info-sample-header">
+                          <span className="info-list-index">#{i + 1}</span>
+                          <span className="info-sample-name">{s.sample_name || "—"}</span>
+                        </div>
+                        <div className="info-sample-region">{s.region || "—"}</div>
+                        {job?.volume_ml != null && (
+                          <div className="info-sample-count">{job.volume_ml.toFixed(2)} mL</div>
+                        )}
+                        <div className="info-sample-actions" onClick={e => e.stopPropagation()}>
+                          {job && (
+                            <button type="button" className="icon-btn"
+                              title="View capture"
+                              onClick={() => { setViewJobModal(job); setEditJobVolume(String(job.volume_ml ?? "")); }}>
+                              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                                <circle cx="12" cy="13" r="4"/>
+                              </svg>
+                            </button>
+                          )}
+                          <button type="button" className="icon-btn rename-btn"
+                            title={`Rename ${s.sample_name}`}
+                            onClick={() => renameSample(s.sample_name)}>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                            </svg>
+                          </button>
+                          <button type="button" className="icon-btn delete-btn"
+                            title={`Delete ${s.sample_name}`}
+                            onClick={() => setConfirmDeleteSample(s.sample_name)}>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="3 6 5 6 21 6"/>
+                              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                              <path d="M10 11v6"/><path d="M14 11v6"/>
+                              <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                            </svg>
+                          </button>
+                        </div>
+                      </li>
+                    );
+                  })}
                 </ul>
               </>
             )}
@@ -933,6 +1029,36 @@ export default function ProjectDataPage() {
           {activeTab === "data" && (
             <div className="project-main">
 
+              {/* Dosing jobs section */}
+              {project.system_type === "dosing" && dosingJobs.length > 0 && (
+                <div className="graph-card" style={{ gridColumn: "1 / -1" }}>
+                  <h2>Dosing captures</h2>
+                  {dosingJobs.length === 0 ? (
+                    <p className="no-data">No captures yet. Start collection and the ESP-CAM will send images automatically.</p>
+                  ) : (
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12, marginTop: 8 }}>
+                      {dosingJobs.map(job => (
+                        <div key={job.id} className="info-sample-item" style={{ cursor: "pointer", padding: 12 }}
+                          onClick={() => { setViewJobModal(job); setEditJobVolume(String(job.volume_ml ?? "")); }}>
+                          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>{job.source_name}</div>
+                          <div style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: 8 }}>{job.liquid}</div>
+                          {job.image_path && (
+                            <img src={`${API}/uploads/${job.image_path.split(/[\\/]/).pop()}`}
+                              alt="before" style={{ width: "100%", borderRadius: 6, objectFit: "cover", height: 100 }} />
+                          )}
+                          <div style={{ marginTop: 8, fontSize: 12 }}>
+                            <span style={{ fontWeight: 600, color: "var(--accent)" }}>
+                              {job.volume_ml != null ? `${job.volume_ml.toFixed(2)} mL` : "Processing…"}
+                            </span>
+                            {job.moles != null && <span style={{ color: "var(--ink-3)", marginLeft: 8 }}>{job.moles.toFixed(4)} mol</span>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="graph-card" style={{ gridColumn: "1 / -1" }}>
                 <h2>Device readings</h2>
                 {readings.filter(r => r.source === "device").length === 0 ? (
@@ -1025,6 +1151,51 @@ export default function ProjectDataPage() {
                   </table>
                 )}
               </div>
+
+              {/* Readings table with edit/delete */}
+              {readings.filter(r => r.source === "manual").length > 0 && (
+                <div className="graph-card" style={{ gridColumn: "1 / -1" }}>
+                  <h2>All manual readings</h2>
+                  <table className="quality-table">
+                    <thead>
+                      <tr><th>Sample</th><th>Parameter</th><th>Value</th><th>Unit</th><th>Actions</th></tr>
+                    </thead>
+                    <tbody>
+                      {readings.filter(r => r.source === "manual").map(r => {
+                        const sample = project.samples.find(s => s.id === r.sample_id);
+                        return (
+                          <tr key={r.id}>
+                            <td>{sample?.sample_name || "—"}</td>
+                            <td>{r.parameter}</td>
+                            <td style={{ fontWeight: 600 }}>{r.value}</td>
+                            <td style={{ color: "var(--ink-3)" }}>{r.unit || "—"}</td>
+                            <td>
+                              <div className="db-table-actions">
+                                <button type="button" className="icon-btn rename-btn" title="Edit value"
+                                  onClick={() => { setReadingModalError(""); setEditReadingModal(r); }}>
+                                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                                  </svg>
+                                </button>
+                                <button type="button" className="icon-btn delete-btn" title="Delete reading"
+                                  onClick={() => setDeleteReadingModal(r)}>
+                                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <polyline points="3 6 5 6 21 6"/>
+                                    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                                    <path d="M10 11v6"/><path d="M14 11v6"/>
+                                    <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                                  </svg>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
 
@@ -1207,6 +1378,69 @@ export default function ProjectDataPage() {
           </div>
         </div>
       )}
+      {/* ── VIEW DOSING JOB MODAL ── */}
+      {viewJobModal && (
+        <div className="modal-overlay" onClick={() => setViewJobModal(null)}>
+          <div className="modal modal-large" onClick={e => e.stopPropagation()}>
+            <h3>{viewJobModal.source_name} — {viewJobModal.liquid}</h3>
+
+            {/* Before / After images */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, margin: "16px 0" }}>
+              <div>
+                <p style={{ fontSize: 12, fontWeight: 600, color: "var(--ink-3)", marginBottom: 6, textAlign: "center" }}>BEFORE</p>
+                {viewJobModal.image_path ? (
+                  <img src={`${API}/uploads/${viewJobModal.image_path.split(/[\\/]/).pop()}`}
+                    alt="before" style={{ width: "100%", borderRadius: 8, objectFit: "contain", maxHeight: 260 }} />
+                ) : <p className="no-data">No image</p>}
+              </div>
+              <div>
+                <p style={{ fontSize: 12, fontWeight: 600, color: "var(--ink-3)", marginBottom: 6, textAlign: "center" }}>AFTER</p>
+                {viewJobModal.image_path_after ? (
+                  <img src={`${API}/uploads/${viewJobModal.image_path_after.split(/[\\/]/).pop()}`}
+                    alt="after" style={{ width: "100%", borderRadius: 8, objectFit: "contain", maxHeight: 260 }} />
+                ) : <p className="no-data">No after image yet</p>}
+              </div>
+            </div>
+
+            {/* Editable values */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "var(--ink-2)" }}>Volume dispensed (mL)</label>
+                <input type="number" step="0.001" value={editJobVolume}
+                  onChange={e => setEditJobVolume(e.target.value)}
+                  style={{ width: "100%", marginTop: 4 }} />
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
+                <div style={{ fontSize: 12, color: "var(--ink-3)" }}>
+                  Moles: <strong>{viewJobModal.moles != null ? viewJobModal.moles.toFixed(6) : "—"}</strong>
+                </div>
+                <div style={{ fontSize: 12, color: "var(--ink-3)" }}>
+                  Concentration: <strong>{viewJobModal.concentration != null ? viewJobModal.concentration : "—"}</strong>
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-actions">
+              <button type="button" onClick={async () => {
+                const vol = parseFloat(editJobVolume);
+                if (isNaN(vol)) { alert("Enter a valid volume."); return; }
+                const res = await fetch(`${API}/dosing/${projectId}/jobs/${viewJobModal.id}`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` },
+                  body: JSON.stringify({ volume_ml: vol }),
+                });
+                if (res.ok) {
+                  const updated: DosingJob = await res.json();
+                  setDosingJobs(prev => prev.map(j => j.id === updated.id ? updated : j));
+                  setViewJobModal(updated);
+                } else alert("Could not update.");
+              }}>Save volume</button>
+              <button type="button" onClick={() => setViewJobModal(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── CONFIRM DELETE SAMPLE MODAL ── */}
       {confirmDeleteSample && (
         <div className="modal-overlay" onClick={() => setConfirmDeleteSample(null)}>
@@ -1219,19 +1453,143 @@ export default function ProjectDataPage() {
               </span>
             </p>
             <div className="modal-actions">
-              <button
-                type="button"
-                style={{ background: "var(--danger)", borderColor: "var(--danger)" }}
-                onClick={() => deleteSample(confirmDeleteSample)}
-              >
+              <button type="button" style={{ background: "var(--danger)", borderColor: "var(--danger)" }}
+                onClick={() => deleteSample(confirmDeleteSample)}>
                 Yes, delete sample
               </button>
-              <button type="button" onClick={() => setConfirmDeleteSample(null)}>
-                Cancel
-              </button>
+              <button type="button" onClick={() => setConfirmDeleteSample(null)}>Cancel</button>
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── EDIT SAMPLE MODAL ── */}
+      {editSampleModal && (
+        <div className="modal-overlay" onClick={() => setEditSampleModal(null)}>
+          <div className="modal modal-large" onClick={e => e.stopPropagation()}>
+            <h3>Edit sample</h3>
+            <form onSubmit={submitEditSample}>
+              <label htmlFor="edit-sample-name">Sample name</label>
+              <input id="edit-sample-name" type="text" value={editSampleName} required maxLength={18} autoFocus
+                onChange={e => { setEditSampleName(e.target.value); setEditSampleError(""); }} />
+              <label htmlFor="edit-sample-region">Region</label>
+              <input id="edit-sample-region" type="text" value={editSampleRegion} maxLength={25}
+                placeholder="e.g. North Zone"
+                onChange={e => { setEditSampleRegion(e.target.value); setEditSampleError(""); }} />
+              {editSampleError && <p className="form-error">{editSampleError}</p>}
+              <div className="modal-actions" style={{ marginTop: 16 }}>
+                <button type="submit">Save name & region</button>
+                <button type="button" onClick={() => setEditSampleModal(null)}>Cancel</button>
+              </div>
+            </form>
+
+            {/* Readings for this sample */}
+            {(() => {
+              const sampleReadings = readings.filter(r => r.sample_id === editSampleModal.id && r.source === "manual");
+              if (sampleReadings.length === 0) return <p className="no-data" style={{ marginTop: 16 }}>No manual readings for this sample.</p>;
+              return (
+                <div style={{ marginTop: 20 }}>
+                  <p style={{ fontSize: 13, fontWeight: 600, color: "var(--ink-2)", marginBottom: 8 }}>Readings</p>
+                  <table className="quality-table">
+                    <thead><tr><th>Parameter</th><th>Value</th><th>Actions</th></tr></thead>
+                    <tbody>
+                      {sampleReadings.map(r => (
+                        <tr key={r.id}>
+                          <td>
+                            <select defaultValue={r.parameter} id={`param-${r.id}`}
+                              className="modal-select" style={{ fontSize: 12, padding: "4px 8px" }}>
+                              {PARAMETERS.map(p => <option key={p} value={p}>{p}</option>)}
+                            </select>
+                          </td>
+                          <td>
+                            <input id={`val-${r.id}`} type="number" step="any"
+                              defaultValue={r.value}
+                              style={{ width: 80, fontSize: 12, padding: "4px 8px" }} />
+                          </td>
+                          <td>
+                            <div className="db-table-actions">
+                              <button type="button" className="icon-btn rename-btn" title="Save"
+                                onClick={async () => {
+                                  const paramEl = document.getElementById(`param-${r.id}`) as HTMLSelectElement;
+                                  const valEl   = document.getElementById(`val-${r.id}`)   as HTMLInputElement;
+                                  const newVal  = Number(valEl.value);
+                                  if (isNaN(newVal)) return;
+                                  const res = await fetch(`${API}/multisensor/${projectId}/readings/${r.id}`, {
+                                    method: "PATCH",
+                                    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` },
+                                    body: JSON.stringify({ parameter: paramEl.value, value: newVal, unit: r.unit, source: r.source, sample_id: r.sample_id }),
+                                  });
+                                  if (res.ok) await loadData();
+                                  else alert("Could not update reading.");
+                                }}>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <polyline points="20 6 9 17 4 12"/>
+                                </svg>
+                              </button>
+                              <button type="button" className="icon-btn delete-btn" title="Delete"
+                                onClick={async () => {
+                                  setDeleteReadingModal(r);
+                                }}>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <polyline points="3 6 5 6 21 6"/>
+                                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                                  <path d="M10 11v6"/><path d="M14 11v6"/>
+                                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                                </svg>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* ── EDIT READING MODAL ── */}
+      {editReadingModal && (
+        <EditModal
+          title="Edit reading"
+          fields={[
+            { id: "parameter", label: "Parameter", defaultValue: editReadingModal.parameter },
+            { id: "value", label: "Value", type: "number", defaultValue: String(editReadingModal.value) },
+          ]}
+          error={readingModalError}
+          onClose={() => { setEditReadingModal(null); setReadingModalError(""); }}
+          onSave={async v => {
+            const val = Number(v.value);
+            if (isNaN(val)) { setReadingModalError("Enter a valid number."); return; }
+            const res = await fetch(`${API}/multisensor/${projectId}/readings/${editReadingModal.id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` },
+              body: JSON.stringify({ parameter: v.parameter, value: val, unit: editReadingModal.unit, source: editReadingModal.source, sample_id: editReadingModal.sample_id }),
+            });
+            if (res.ok) { setEditReadingModal(null); await loadData(); }
+            else setReadingModalError("Could not update reading.");
+          }}
+        />
+      )}
+
+      {/* ── DELETE READING MODAL ── */}
+      {deleteReadingModal && (
+        <ConfirmModal
+          title="Delete reading"
+          message={<>Delete the <strong>{deleteReadingModal.parameter}</strong> reading ({deleteReadingModal.value})? This cannot be undone.</>}
+          confirmLabel="Yes, delete"
+          danger
+          onClose={() => setDeleteReadingModal(null)}
+          onConfirm={async () => {
+            const res = await fetch(`${API}/multisensor/${projectId}/readings/${deleteReadingModal.id}`, {
+              method: "DELETE", headers: { Authorization: `Bearer ${token()}` },
+            });
+            setDeleteReadingModal(null);
+            if (res.ok) await loadData();
+          }}
+        />
       )}
     </div>
   );

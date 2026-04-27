@@ -8,8 +8,10 @@ from app.db import get_db
 from app.models import User, Project, UserRole, MergedProject
 from app.schemas import UserOut
 from app.auth import get_current_user
+from passlib.context import CryptContext
 
 router = APIRouter(prefix="/users", tags=["users"])
+pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 class UserWithStats(UserOut):
     project_count: int = 0
@@ -122,3 +124,51 @@ def update_role(
     db.commit()
     db.refresh(user)
     return {"id": user.id, "role": user.role}
+
+@router.post("/me/change-password")
+def change_password(
+    body: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    current_pw  = body.get("current_password", "")
+    new_pw      = body.get("new_password", "")
+    if not pwd_ctx.verify(current_pw, current_user.hashed_pw):
+        raise HTTPException(400, "Current password is incorrect")
+    if len(new_pw) < 6:
+        raise HTTPException(400, "New password must be at least 6 characters")
+    current_user.hashed_pw = pwd_ctx.hash(new_pw)
+    db.commit()
+    return {"message": "Password changed successfully"}
+
+@router.post("/{user_id}/reset-password")
+def reset_password(
+    user_id: str,
+    body: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != UserRole.admin:
+        raise HTTPException(403, "Admin only")
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user: raise HTTPException(404, "User not found")
+    new_pw = body.get("new_password", "")
+    if len(new_pw) < 6:
+        raise HTTPException(400, "Password must be at least 6 characters")
+    user.hashed_pw = pwd_ctx.hash(new_pw)
+    db.commit()
+    return {"message": f"Password reset for {user.username}"}
+
+@router.patch("/{user_id}/approve")
+def approve_user(
+    user_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != UserRole.admin:
+        raise HTTPException(403, "Admin only")
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user: raise HTTPException(404, "User not found")
+    user.is_approved = not user.is_approved
+    db.commit()
+    return {"id": user.id, "is_approved": user.is_approved}

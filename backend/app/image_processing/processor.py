@@ -362,3 +362,63 @@ def process_dosing_image(image_path: str, liquid: str) -> Dict[str, Optional[flo
         print(f"[processor] Unexpected error: {e}")
 
     return result
+
+
+def process_dosing_pair(before_path: str, after_path: str, liquid: str) -> Dict[str, Optional[float]]:
+    """
+    Called when both before and after images are available.
+    Volume dispensed = meniscus_before - meniscus_after (burette reads top-down).
+    """
+    result: Dict[str, Optional[float]] = {
+        "volume_ml":     None,
+        "moles":         None,
+        "concentration": None,
+        "confidence":    None,
+    }
+
+    try:
+        def read_meniscus(image_path: str):
+            image = cv2.imread(image_path)
+            if image is None:
+                raise ValueError(f"Could not read image: {image_path}")
+            proc            = preprocess_image(image)
+            roi_left, roi_right = estimate_tube_roi(proc)
+            tube            = fit_tube_model(proc, roi_left, roi_right)
+            center_roi, _   = build_center_roi(proc, tube)
+            calibration     = detect_scale_calibration(proc, tube)
+            meniscus        = detect_meniscus_visual(
+                                  center_roi, proc, tube,
+                                  calibration["y0_px"], calibration["px_per_ml"])
+            volume          = compute_volume_from_scale(
+                                  meniscus["meniscus_px"],
+                                  calibration["y0_px"],
+                                  calibration["px_per_ml"])
+            return volume, meniscus["confidence"]
+
+        vol_before, conf_before = read_meniscus(before_path)
+        vol_after,  conf_after  = read_meniscus(after_path)
+
+        # Volume dispensed is the drop in burette reading
+        volume_ml = vol_after - vol_before
+        if volume_ml < 0:
+            volume_ml = abs(volume_ml)
+
+        props         = LIQUID_PROPERTIES.get(liquid, {"concentration": 0.1})
+        concentration = props["concentration"]
+        moles         = concentration * (volume_ml / 1000.0)
+        confidence    = round((conf_before + conf_after) / 2, 3)
+
+        result["volume_ml"]     = round(volume_ml, 3)
+        result["moles"]         = round(moles, 6)
+        result["concentration"] = concentration
+        result["confidence"]    = confidence
+
+        print(f"[processor] pair {liquid}: before={vol_before:.3f}mL after={vol_after:.3f}mL "
+              f"dispensed={volume_ml:.3f}mL conf={confidence}")
+
+    except ValueError as e:
+        print(f"[processor] Pair detection failed ({e})")
+    except Exception as e:
+        print(f"[processor] Unexpected error in pair: {e}")
+
+    return result
