@@ -3,11 +3,12 @@ import { useNavigate } from "react-router-dom";
 import { EditModal, ConfirmModal } from "../components/EditModal";
 
 type BackendUser = {
-  id:         string;
-  username:   string;
-  email:      string;
-  role:       "admin" | "user" | "researcher";
-  created_at: string;
+  id:          string;
+  username:    string;
+  email:       string;
+  role:        "admin" | "user" | "researcher";
+  is_approved: boolean;
+  created_at:  string;
 };
 
 type BackendProject = {
@@ -64,8 +65,8 @@ export default function AdminPage() {
 
   useEffect(() => {
     fetch(`${API}/system/settings`)
-      .then(r => r.ok ? r.json() : {})
-      .then(d => { if (d.camera_ip) setCameraIp(d.camera_ip); })
+      .then(r => r.ok ? r.json() : {} as { camera_ip?: string })
+      .then((d: { camera_ip?: string }) => { if (d.camera_ip) setCameraIp(d.camera_ip); })
       .catch(() => {});
   }, []);
 

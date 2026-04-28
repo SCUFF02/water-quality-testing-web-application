@@ -47,7 +47,7 @@ export default function SignUpPage() {
             <p style={{ color: "var(--ink-2)", fontSize: 14, marginBottom: 24 }}>
               Your account is pending admin approval.<br/>You'll be able to sign in once approved.
             </p>
-            <Link to="/signin" className="wave-btn" style={{ display: "inline-block", textDecoration: "none", textAlign: "center" }}>
+            <Link to="/signin" className="wave-btn" style={{ display: "inline-block", textDecoration: "none", textAlign: "center", width: "auto", padding: "10px 32px" }}>
               Back to Sign In
             </Link>
           </div>

@@ -1,16 +1,27 @@
-# Never commit these
 # Python
 .venv/
 venv/
+backend/venv/
+backend/app/venv/
 __pycache__/
 *.pyc
 *.pyo
-.env
+*.pyd
+
+# Secrets — never commit
+backend/.env
 
 # Node
 node_modules/
-uploads/
+frontend/node_modules/
+
+# Build output
 dist/
+frontend/dist/
+
+# Uploads (user data)
+uploads/
+backend/uploads/
 
 # IDE
 .vscode/
@@ -18,5 +29,4 @@ dist/
 
 # OS
 .DS_Store
-Thumbs.db".env" 
-
+Thumbs.db
