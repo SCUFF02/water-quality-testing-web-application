@@ -846,11 +846,11 @@ export default function ProjectDataPage() {
                 <div className="info-section-title">ESP-CAM Live Feed</div>
                 {cameraIp && projectStatus === "active" ? (
                   <div style={{ marginTop: 6 }}>
-                    <img
+                    <iframe
                       src={`http://${cameraIp}/stream`}
-                      alt="Live feed"
-                      style={{ width: "100%", borderRadius: 8, border: "1px solid var(--line)" }}
-                      onError={e => { (e.target as HTMLImageElement).style.display = "none"; }}
+                      title="Live feed"
+                      scrolling="no"
+                      style={{ width: "100%", height: 200, borderRadius: 8, border: "1px solid var(--line)", overflow: "hidden", display: "block" }}
                     />
                     <p style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 4, textAlign: "center" }}>
                       Live — {cameraIp}

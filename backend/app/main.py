@@ -105,3 +105,32 @@ def update_system_settings(body: dict):
     if "camera_ip" in body:
         settings.CAMERA_IP = body["camera_ip"].strip()
     return {"camera_ip": settings.CAMERA_IP}
+
+import requests as req_lib
+from fastapi.responses import StreamingResponse
+
+@app.get("/camera/stream")
+def proxy_camera_stream():
+    """Proxy the ESP-CAM MJPEG stream through the backend to avoid CORS issues."""
+    if not settings.CAMERA_IP:
+        from fastapi import HTTPException
+        raise HTTPException(404, "Camera IP not configured")
+    
+    cam_url = f"http://{settings.CAMERA_IP}/stream"
+    
+    try:
+        r = req_lib.get(cam_url, stream=True, timeout=10)
+        content_type = r.headers.get("Content-Type", "multipart/x-mixed-replace;boundary=123456789000000000000987654321")
+        
+        def generate():
+            try:
+                for chunk in r.iter_content(chunk_size=4096):
+                    if chunk:
+                        yield chunk
+            except Exception as e:
+                print(f"[camera proxy] stream ended: {e}")
+        
+        return StreamingResponse(generate(), media_type=content_type)
+    except Exception as e:
+        from fastapi import HTTPException
+        raise HTTPException(503, f"Cannot reach camera: {e}")
