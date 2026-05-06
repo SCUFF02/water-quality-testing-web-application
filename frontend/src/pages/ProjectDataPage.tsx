@@ -27,7 +27,7 @@ type DosingJob = {
 };
 
 type BackendReading = {
-  id: string; parameter: string; value: number; unit: string;
+  id: string; parameter: string; value: number | null; unit: string;
   source: string; sample_id: string | null; recorded_at: string;
 };
 
@@ -470,16 +470,18 @@ export default function ProjectDataPage() {
 
   // ── Convert backend readings to DataPoints for charts ─────────────────────
   const manualData: DataPoint[] = useMemo(() => {
-    return readings.map((r, i) => {
-      const sample = project?.samples.find(s => s.id === r.sample_id);
-      return {
-        x: i + 1,
-        y: r.value,
-        sampleName: sample?.sample_name || "Unknown",
-        region:     sample?.region || "",
-        parameter:  r.parameter,
-      };
-    });
+    return readings
+      .filter((r) => r.value !== null && r.value !== undefined)
+      .map((r, i) => {
+        const sample = project?.samples.find(s => s.id === r.sample_id);
+        return {
+          x: i + 1,
+          y: r.value as number,
+          sampleName: sample?.sample_name || "Unknown",
+          region:     sample?.region || "",
+          parameter:  r.parameter,
+        };
+      });
   }, [readings, project]);
 
   // Samples from project
@@ -1065,10 +1067,10 @@ export default function ProjectDataPage() {
                   <p className="no-data">No device readings yet. Connect your ESP32 and it will push data automatically.</p>
                 ) : (
                   <div className="bar-chart">
-                    {readings.filter(r => r.source === "device").map((r, ri) => (
+                    {readings.filter(r => r.source === "device" && r.value !== null).map((r, ri) => (
                       <div key={r.id} className="bar-col">
                         <span className="bar-label">{r.value}</span>
-                        <div className="bar" style={{ height: `${Math.min((r.value / 100) * 100, 100)}%` }} />
+                        <div className="bar" style={{ height: `${Math.min(((r.value as number) / 100) * 100, 100)}%` }} />
                         <span className="bar-x">{r.parameter?.split(" ")[0] ?? ri + 1}</span>
                       </div>
                     ))}
@@ -1167,7 +1169,7 @@ export default function ProjectDataPage() {
                           <tr key={r.id}>
                             <td>{sample?.sample_name || "—"}</td>
                             <td>{r.parameter}</td>
-                            <td style={{ fontWeight: 600 }}>{r.value}</td>
+                            <td style={{ fontWeight: 600 }}>{r.value ?? "—"}</td>
                             <td style={{ color: "var(--ink-3)" }}>{r.unit || "—"}</td>
                             <td>
                               <div className="db-table-actions">
@@ -1503,7 +1505,7 @@ export default function ProjectDataPage() {
                           </td>
                           <td>
                             <input id={`val-${r.id}`} type="number" step="any"
-                              defaultValue={r.value}
+                              defaultValue={r.value ?? ""}
                               style={{ width: 80, fontSize: 12, padding: "4px 8px" }} />
                           </td>
                           <td>
@@ -1556,7 +1558,7 @@ export default function ProjectDataPage() {
           title="Edit reading"
           fields={[
             { id: "parameter", label: "Parameter", defaultValue: editReadingModal.parameter },
-            { id: "value", label: "Value", type: "number", defaultValue: String(editReadingModal.value) },
+            { id: "value", label: "Value", type: "number", defaultValue: String(editReadingModal.value ?? "") },
           ]}
           error={readingModalError}
           onClose={() => { setEditReadingModal(null); setReadingModalError(""); }}
@@ -1578,7 +1580,7 @@ export default function ProjectDataPage() {
       {deleteReadingModal && (
         <ConfirmModal
           title="Delete reading"
-          message={<>Delete the <strong>{deleteReadingModal.parameter}</strong> reading ({deleteReadingModal.value})? This cannot be undone.</>}
+          message={<>Delete the <strong>{deleteReadingModal.parameter}</strong> reading ({deleteReadingModal.value ?? "no value"})? This cannot be undone.</>}
           confirmLabel="Yes, delete"
           danger
           onClose={() => setDeleteReadingModal(null)}
