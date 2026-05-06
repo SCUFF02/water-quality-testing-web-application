@@ -69,7 +69,7 @@ class SensorReading(Base):
     project_id  = Column(String(36), ForeignKey("projects.id"), nullable=False)
     sample_id   = Column(String(36), ForeignKey("samples.id"),  nullable=True)
     parameter   = Column(String(60), nullable=False)
-    value       = Column(Float,      nullable=False)
+    value       = Column(Float,      nullable=True)
     unit        = Column(String(20), default="")
     source      = Column(String(20), default="manual")   # "mqtt" | "manual"
     recorded_at = Column(DateTime,   default=datetime.utcnow)

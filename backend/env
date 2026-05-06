@@ -1,0 +1,16 @@
+# ── Change this to your XAMPP PC's PUBLIC IP and the password you set in phpMyAdmin ──
+# For local development keep localhost. For production change to your XAMPP public IP.
+DATABASE_URL=mysql+pymysql://root:@localhost:3306/waterlab
+
+SECRET_KEY=3214a5377cab768ab8fdef4077bd7506c3e527c5900cc0ecff82c1acf525baad
+
+# ── Change this to the absolute path on your cPanel server ──
+# Example: /home/yourusername/waterlab/uploads
+UPLOAD_DIR=uploads
+
+
+
+ACCESS_TOKEN_EXPIRE_MINUTES=180
+ALGORITHM=HS256
+
+CAMERA_IP=172.16.2.202

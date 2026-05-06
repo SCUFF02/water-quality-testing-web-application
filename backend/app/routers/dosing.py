@@ -228,3 +228,42 @@ def get_jobs(
     total = q.count()
     items = q.offset((page - 1) * per_page).limit(per_page).all()
     return {"total": total, "page": page, "per_page": per_page, "items": items}
+
+# ── ESP32 endpoints (no JWT, use API key) ─────────────────────────────────────
+
+@router.get("/active-project")
+def get_active_project(x_api_key: str = Header(...), db: Session = Depends(get_db)):
+    """ESP32 polls this to find an active dosing project."""
+    if x_api_key != settings.DEVICE_API_KEY:
+        raise HTTPException(403, "Invalid device API key")
+    
+    # Find first project with status="active" and system_type="dosing"
+    project = db.query(Project).filter(
+        Project.system_type == "dosing",
+        Project.status == "active"
+    ).first()
+    
+    if not project:
+        raise HTTPException(404, "No active dosing project")
+    
+    return {
+        "id": project.id,
+        "name": project.name,
+        "sample_count": len(project.samples),
+        "samples": [
+            {"id": s.id, "sample_name": s.sample_name, "region": s.region}
+            for s in project.samples
+        ]
+    }
+
+@router.post("/{project_id}/stop-device")
+def stop_project_device(project_id: str, x_api_key: str = Header(...), db: Session = Depends(get_db)):
+    """ESP32 calls this after finishing all samples — no JWT needed."""
+    if x_api_key != settings.DEVICE_API_KEY:
+        raise HTTPException(403, "Invalid device API key")
+    p = db.query(Project).filter(Project.id == project_id).first()
+    if not p:
+        raise HTTPException(404, "Project not found")
+    p.status = "idle"
+    db.commit()
+    return {"status": "idle"}

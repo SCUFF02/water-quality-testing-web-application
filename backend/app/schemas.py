@@ -78,16 +78,16 @@ class ProjectOut(BaseModel):
 
 # ── Sensor readings ───────────────────────────────────────────────────────────
 class ReadingIn(BaseModel):
-    sample_id: Optional[str] = None
-    parameter: str           = Field(min_length=1, max_length=60)
-    value:     float
-    unit:      str           = Field(default="",       max_length=20)
-    source:    str           = Field(default="manual", max_length=20)
+    sample_id: Optional[str]   = None
+    parameter: str             = Field(min_length=1, max_length=60)
+    value:     Optional[float] = None
+    unit:      str             = Field(default="",       max_length=20)
+    source:    str             = Field(default="manual", max_length=20)
 
 class ReadingOut(BaseModel):
     id:          str
     parameter:   str
-    value:       float
+    value:       Optional[float]
     unit:        str
     source:      str
     sample_id:   Optional[str]
