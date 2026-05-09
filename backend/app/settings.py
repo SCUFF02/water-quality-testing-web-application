@@ -1,3 +1,4 @@
+import os
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
@@ -8,9 +9,9 @@ class Settings(BaseSettings):
 
     UPLOAD_DIR:     str = "uploads"
     DEVICE_API_KEY: str = "espclient@"
-    CAMERA_IP:      str = ""  # Set this to your ESP-CAM IP e.g. 192.168.1.45
+    CAMERA_IP:      str = ""  # Persisted in .env file
 
     class Config:
-        env_file = ".env"
+        env_file = os.path.join(os.path.dirname(__file__), "..", ".env")
 
 settings = Settings()

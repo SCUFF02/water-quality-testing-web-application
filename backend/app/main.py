@@ -27,10 +27,8 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        # ── Add your actual domain here ──
-        "https://waterlab.certe.tn",       # change to your real domain
-        "https://api.waterlab.certe.tn",   # if backend is on a subdomain
-        # ── Keep these for local development ──
+        "https://waterlab.certe.tn",
+        "https://api.waterlab.certe.tn",
         "http://localhost:5173",
         "http://localhost:3000",
         "http://localhost:4173",
@@ -104,6 +102,25 @@ def get_system_settings():
 def update_system_settings(body: dict):
     if "camera_ip" in body:
         settings.CAMERA_IP = body["camera_ip"].strip()
+        # Persist to .env file so it survives restarts
+        env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+        env_path = os.path.abspath(env_path)
+        # Read existing .env lines
+        lines = []
+        if os.path.exists(env_path):
+            with open(env_path, "r") as f:
+                lines = f.readlines()
+        # Update or add CAMERA_IP line
+        found = False
+        for i, line in enumerate(lines):
+            if line.startswith("CAMERA_IP="):
+                lines[i] = f"CAMERA_IP={settings.CAMERA_IP}\n"
+                found = True
+                break
+        if not found:
+            lines.append(f"CAMERA_IP={settings.CAMERA_IP}\n")
+        with open(env_path, "w") as f:
+            f.writelines(lines)
     return {"camera_ip": settings.CAMERA_IP}
 
 import requests as req_lib

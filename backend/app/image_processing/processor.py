@@ -364,6 +364,96 @@ def process_dosing_image(image_path: str, liquid: str) -> Dict[str, Optional[flo
     return result
 
 
+# ── Syringe piston detection ──────────────────────────────────────────────────
+# Detects the dark rubber piston in a syringe image and returns volume in mL
+
+SYRINGE_VOLUME_ML    = 60.0   # total syringe volume
+SYRINGE_X_FRAC_START = 0.30   # left edge of syringe as fraction of image width
+SYRINGE_X_FRAC_END   = 0.70   # right edge of syringe
+SYRINGE_Y_FRAC_TOP   = 0.05   # top of scale as fraction of image height
+SYRINGE_Y_FRAC_BOT   = 0.95   # bottom of scale
+PISTON_BLACK_THRESH  = 80     # pixel brightness below this = dark piston
+PISTON_DARK_RATIO    = 0.40   # fraction of row that must be dark
+
+
+def detect_piston_volume(image_path: str) -> Optional[float]:
+    """
+    Detects the dark rubber piston in a syringe image.
+    Returns volume in mL remaining below the piston, or None if not detected.
+    """
+    image = cv2.imread(image_path)
+    if image is None:
+        print(f"[processor] Could not read image: {image_path}")
+        return None
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape
+
+    x_start = int(w * SYRINGE_X_FRAC_START)
+    x_end   = int(w * SYRINGE_X_FRAC_END)
+    y_top   = int(h * SYRINGE_Y_FRAC_TOP)
+    y_bot   = int(h * SYRINGE_Y_FRAC_BOT)
+    line_w  = x_end - x_start
+
+    piston_y = -1
+    for y in range(y_top, y_bot):
+        row = gray[y, x_start:x_end]
+        dark_count = int(np.sum(row < PISTON_BLACK_THRESH))
+        if dark_count > line_w * PISTON_DARK_RATIO:
+            piston_y = y
+            break
+
+    if piston_y < 0:
+        print(f"[processor] Piston not detected in: {image_path}")
+        return None
+
+    # Piston near top = full syringe, near bottom = empty
+    ratio     = (piston_y - y_top) / max(y_bot - y_top, 1)
+    volume_ml = SYRINGE_VOLUME_ML * (1.0 - ratio)
+    volume_ml = max(0.0, min(SYRINGE_VOLUME_ML, volume_ml))
+
+    print(f"[processor] Piston Y={piston_y} → {volume_ml:.2f} mL")
+    return round(volume_ml, 2)
+
+
+def process_syringe_pair(before_path: str, after_path: str, liquid: str) -> Dict[str, Optional[float]]:
+    """
+    Calculates volume dispensed from a syringe using before/after piston positions.
+    Volume dispensed = volume_before - volume_after.
+    """
+    result: Dict[str, Optional[float]] = {
+        "volume_ml":     None,
+        "moles":         None,
+        "concentration": None,
+        "confidence":    None,
+    }
+
+    vol_before = detect_piston_volume(before_path)
+    vol_after  = detect_piston_volume(after_path)
+
+    if vol_before is None or vol_after is None:
+        print(f"[processor] Syringe pair detection failed")
+        return result
+
+    volume_ml = vol_before - vol_after
+    if volume_ml < 0:
+        volume_ml = abs(volume_ml)
+
+    props         = LIQUID_PROPERTIES.get(liquid, {"concentration": 0.1})
+    concentration = props["concentration"]
+    moles         = concentration * (volume_ml / 1000.0)
+
+    result["volume_ml"]     = round(volume_ml, 3)
+    result["moles"]         = round(moles, 6)
+    result["concentration"] = concentration
+    result["confidence"]    = 1.0
+
+    print(f"[processor] syringe {liquid}: before={vol_before}mL after={vol_after}mL "
+          f"dispensed={volume_ml:.3f}mL")
+
+    return result
+
+
 def process_dosing_pair(before_path: str, after_path: str, liquid: str) -> Dict[str, Optional[float]]:
     """
     Called when both before and after images are available.

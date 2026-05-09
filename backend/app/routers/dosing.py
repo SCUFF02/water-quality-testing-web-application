@@ -7,7 +7,7 @@ from app.db import get_db
 from app.models import Project, DosingJob, User, SystemType, Sample
 from app.schemas import DosingJobOut, ProjectCreate, ProjectOut
 from app.auth import get_current_user
-from app.image_processing.processor import process_dosing_image, process_dosing_pair
+from app.image_processing.processor import process_dosing_image, process_dosing_pair, process_syringe_pair
 from app.settings import settings
 
 router = APIRouter(prefix="/dosing", tags=["dosing"])
@@ -95,7 +95,7 @@ async def receive_capture_from_device(
     # Count completed jobs (both before+after processed)
     completed_jobs = db.query(DosingJob).filter(
         DosingJob.project_id == project_id,
-        DosingJob.image_path_after != None,
+        DosingJob.image_path_after.isnot(None),
         DosingJob.image_path_after != ""
     ).count()
 
@@ -110,7 +110,7 @@ async def receive_capture_from_device(
     # Check if there's a pending job waiting for its "after" image
     pending_job = db.query(DosingJob).filter(
         DosingJob.project_id == project_id,
-        DosingJob.image_path_after == None
+        (DosingJob.image_path_after == None) | (DosingJob.image_path_after == "")
     ).order_by(DosingJob.processed_at).first()
 
     if pending_job is None:
@@ -119,7 +119,7 @@ async def receive_capture_from_device(
         source_name = current_sample.sample_name if current_sample else f"sample_{completed_jobs + 1}"
         liquid = current_sample.region or "unknown" if current_sample else "unknown"
 
-        filepath = os.path.join(settings.UPLOAD_DIR, f"{project_id}_{source_name}_before_{completed_jobs + 1}.jpg")
+        filepath = os.path.join(settings.UPLOAD_DIR, f"{project_id}_{source_name}_before_{completed_jobs + 1}_{int(__import__('time').time())}.jpg")
         with open(filepath, "wb") as f: f.write(contents)
 
         job = DosingJob(
@@ -144,11 +144,11 @@ async def receive_capture_from_device(
     else:
         # This is an AFTER image — complete the pending job
         source_name = pending_job.source_name
-        filepath = os.path.join(settings.UPLOAD_DIR, f"{project_id}_{source_name}_after_{completed_jobs + 1}.jpg")
+        filepath = os.path.join(settings.UPLOAD_DIR, f"{project_id}_{source_name}_after_{completed_jobs + 1}_{int(__import__('time').time())}.jpg")
         with open(filepath, "wb") as f: f.write(contents)
 
-        # Process the pair to get volume dispensed
-        result = process_dosing_pair(pending_job.image_path, filepath, pending_job.liquid)
+        # Use syringe piston detection to calculate dispensed volume
+        result = process_syringe_pair(pending_job.image_path, filepath, pending_job.liquid)
 
         pending_job.image_path_after = filepath
         pending_job.volume_ml        = result.get("volume_ml")
