@@ -1,30 +1,39 @@
+
 """
-Dosing image processor — burette volume reader.
-
-Input:  path to a JPEG from ESP-CAM
-Output: dict → volume_ml, moles, concentration
-
-Pipeline (strict burette detection):
-1. Load image with OpenCV
-2. Detect tube walls via gradient analysis
-3. Fit tube model (left/right wall lines)
-4. Build central ROI inside the tube
-5. Auto-calibrate scale from graduation marks
-6. Detect meniscus position via visual scoring
-7. Compute volume from meniscus position
-8. Calculate moles = concentration × volume_in_litres
+processor.py — Lecture de volume de seringue avec base de donnees de reference
+===============================================================================
+Flux complet :
+  1. La camera prend une photo (etat initial OU etat apres dosage)
+  2. La photo est comparee aux images de reference (base de donnees)
+     pour identifier visuellement l'etat le plus proche
+  3. Le volume est calcule par detection du piston (methode directe)
+     et valide par comparaison avec les references
+  4. La difference de volume entre avant et apres dosage est retournee
+ 
+Structure de la base de donnees :
+  database/
+      ref_001.png   <- images de reference avec metadonnees dans db_index.json
+      ref_002.png
+      ...
+  db_index.json     <- {"ref_001.png": {"volume_ml": 10.0, ...}, ...}
+ 
+Les 20 images originales (1.png-10.png et 51.png-60.png) peuvent etre
+importees automatiquement via build_database_from_originals().
 """
-from __future__ import annotations
-
+from _future_ import annotations
+ 
+import json
 import os
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Tuple
-
+import shutil
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+ 
 import cv2
 import numpy as np
-
-# ── Liquid properties ─────────────────────────────────────────────────────────
-LIQUID_PROPERTIES = {
+ 
+# ── Proprietes des liquides ───────────────────────────────────────────────────
+LIQUID_PROPERTIES: Dict[str, Dict[str, float]] = {
     "Chlorine":            {"molar_mass": 70.9,   "concentration": 0.05},
     "Alum":                {"molar_mass": 342.15, "concentration": 0.10},
     "Lime":                {"molar_mass": 74.09,  "concentration": 0.05},
@@ -34,481 +43,716 @@ LIQUID_PROPERTIES = {
     "Ozone":               {"molar_mass": 48.0,   "concentration": 0.02},
     "Fluoride":            {"molar_mass": 41.99,  "concentration": 0.10},
 }
-
-# ── Fixed calibration defaults ────────────────────────────────────────────────
-Y0_REFERENCE_PX        = 151.5
-PX_PER_ML_FIXED        = 44.0
-MM_PER_ML_REFERENCE    = 4.0
-MAX_VOLUME_ML          = 25.0
-
-# ── Detection parameters ──────────────────────────────────────────────────────
-EXPECTED_WIDTH_RANGE_PX   = (14.0, 40.0)
-CENTER_ROI_WIDTH_FRACTION = 0.22
-PROFILE_SMOOTH_WINDOW     = 15
-PROFILE_SMOOTH_SIGMA      = 2.6
-GRADIENT_SMOOTH_WINDOW    = 11
-GRADIENT_SMOOTH_SIGMA     = 1.8
-PEAK_EXCLUSION_PX         = 8
-MAX_COLUMN_SPREAD_PX      = 4.5
-SECOND_PEAK_RATIO_LIMIT   = 0.82
-LOW_CONFIDENCE_THRESHOLD  = 0.45
-
-
+ 
+# ── Parametres seringue 60 ml (calibres sur 20 images reelles) ───────────────
+SYRINGE_TOTAL_ML   = 60.0
+SYRINGE_MIN_ML     = 0.0
+SYRINGE_MAX_ML     = 60.0
+Y_RATIO_AT_60ML    = 0.15   # piston en haut de l'image  -> 60 ml
+Y_RATIO_AT_10ML    = 0.82   # piston en bas              -> 10 ml
+ 
+# Detection du piston
+STRIP_HALF_FRAC    = 0.12
+DARK_THRESH        = 70
+DARK_FRAC_MIN      = 0.15
+MIN_PISTON_HEIGHT  = 12
+SMOOTH_WIN         = 5
+FALLBACK_THRESH    = 100
+FALLBACK_FRAC      = 0.25
+FALLBACK_HEIGHT    = 10
+ 
+# Base de donnees
+DB_DIR             = Path("database")
+DB_INDEX_FILE      = DB_DIR / "db_index.json"
+ 
+# Comparaison
+TOP_K_MATCHES      = 3    # nombre de references les plus proches a moyenner
+HIST_WEIGHT        = 0.45
+STRUCT_WEIGHT      = 0.55
+ 
+ 
+# ── Structures de donnees ─────────────────────────────────────────────────────
 @dataclass
-class TubeModel:
-    left_slope:     float
-    left_intercept: float
-    right_slope:    float
-    right_intercept:float
-    width_px:       float
-    width_cv:       float
-    rows_used:      int
-
-
-def x_at_y(slope: float, intercept: float, y: float) -> float:
-    return slope * y + intercept
-
-
-def smooth_1d(signal: Sequence[float], window: int, sigma: float) -> np.ndarray:
-    arr = np.asarray(signal, dtype=np.float32).reshape(-1, 1)
-    ksize = max(3, window | 1)
-    smoothed = cv2.GaussianBlur(arr, (1, ksize), sigmaX=0, sigmaY=sigma,
-                                 borderType=cv2.BORDER_REPLICATE)
-    return smoothed.reshape(-1)
-
-
-def preprocess_image(image: np.ndarray) -> Dict[str, np.ndarray]:
-    gray       = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    clahe      = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
-    contrast   = clahe.apply(gray)
-    blur       = cv2.GaussianBlur(contrast, (5, 5), 0)
-    background = cv2.morphologyEx(blur, cv2.MORPH_OPEN, np.ones((31, 31), np.uint8))
-    normalized = cv2.normalize(cv2.subtract(blur, background), None, 0, 255,
-                               cv2.NORM_MINMAX).astype(np.uint8)
-    grad_x = cv2.Sobel(normalized, cv2.CV_32F, 1, 0, ksize=3)
-    grad_y = cv2.Sobel(normalized, cv2.CV_32F, 0, 1, ksize=3)
-    return {"gray": gray, "contrast": contrast, "blur": blur,
-            "normalized": normalized, "grad_x": grad_x, "grad_y": grad_y}
-
-
-def estimate_tube_roi(proc: Dict[str, np.ndarray]) -> Tuple[int, int]:
-    normalized = proc["normalized"]
-    edges = cv2.Canny(normalized, 35, 120)
-    _, w = edges.shape
-    col_strength = edges.sum(axis=0).astype(np.float32)
-    col_strength[:int(0.20 * w)] = 0
-    col_strength[int(0.80 * w):] = 0
-    col_strength = smooth_1d(col_strength, 31, 5.0)
-    peak = int(np.argmax(col_strength))
-    if float(col_strength[peak]) <= 0:
-        raise ValueError("tube_not_found")
-    threshold = float(col_strength[peak]) * 0.30
-    left, right = peak, peak
-    while left > 1 and col_strength[left - 1] >= threshold:
-        left -= 1
-    while right < w - 2 and col_strength[right + 1] >= threshold:
-        right += 1
-    pad = max(10, (right - left) // 3)
-    left  = max(0, left - pad)
-    right = min(w - 1, right + pad)
-    if right - left < 25:
-        raise ValueError("tube_roi_too_narrow")
-    return left, right
-
-
-def fit_tube_model(proc: Dict[str, np.ndarray], roi_left: int, roi_right: int) -> TubeModel:
-    grad_x = proc["grad_x"][:, roi_left:roi_right]
-    h, w = grad_x.shape
-    center = w // 2
-    left_band  = grad_x[:, :center]
-    right_band = grad_x[:, center:]
-    ys: List[float] = []
-    lefts: List[float] = []
-    rights: List[float] = []
-    widths: List[float] = []
-    for y in range(25, h - 25, 2):
-        left_row  = left_band[y]
-        right_row = right_band[y]
-        left_idx  = int(np.argmax(left_row))
-        right_idx = int(np.argmin(right_row)) + center
-        left_strength  = float(left_row[left_idx])
-        right_strength = float(-right_row[right_idx - center])
-        width = right_idx - left_idx
-        if left_strength < 6 or right_strength < 6:
-            continue
-        if not (EXPECTED_WIDTH_RANGE_PX[0] <= width <= EXPECTED_WIDTH_RANGE_PX[1]):
-            continue
-        ys.append(float(y))
-        lefts.append(float(roi_left + left_idx))
-        rights.append(float(roi_left + right_idx))
-        widths.append(float(width))
-    if len(widths) < 25:
-        raise ValueError("not_enough_wall_samples")
-    width_median = float(np.median(widths))
-    keep = [i for i, width in enumerate(widths)
-            if abs(width - width_median) <= max(2.5, width_median * 0.12)]
-    if len(keep) < 20:
-        keep = list(range(len(widths)))
-    ys_arr    = np.asarray([ys[i]     for i in keep], dtype=np.float32)
-    left_arr  = np.asarray([lefts[i]  for i in keep], dtype=np.float32)
-    right_arr = np.asarray([rights[i] for i in keep], dtype=np.float32)
-    width_arr = right_arr - left_arr
-    left_fit  = np.polyfit(ys_arr, left_arr,  1)
-    right_fit = np.polyfit(ys_arr, right_arr, 1)
-    return TubeModel(
-        left_slope=float(left_fit[0]),   left_intercept=float(left_fit[1]),
-        right_slope=float(right_fit[0]), right_intercept=float(right_fit[1]),
-        width_px=float(np.median(width_arr)),
-        width_cv=float(np.std(width_arr) / max(np.mean(width_arr), 1.0)),
-        rows_used=len(keep),
+class PistonReading:
+    volume_ml:    float
+    piston_y_px:  int
+    piston_ratio: float
+    confidence:   float
+    method:       str
+ 
+ 
+@dataclass
+class ReferenceEntry:
+    filename:  str
+    volume_ml: float
+    features:  np.ndarray   # vecteur de features (hist + struct)
+ 
+ 
+@dataclass
+class MatchResult:
+    volume_ml:       float   # volume estime apres comparaison DB
+    direct_volume:   float   # volume estime par detection directe
+    db_volume:       float   # volume estime par les references
+    best_match_file: str     # image de reference la plus proche
+    match_score:     float   # similarite cosinus 0-1
+    confidence:      float
+ 
+ 
+@dataclass
+class DosageResult:
+    volume_before_ml:  float
+    volume_after_ml:   float
+    dispensed_ml:      float
+    moles:             float
+    concentration:     float
+    confidence_before: float
+    confidence_after:  float
+    liquid:            str
+ 
+ 
+# ── Extraction de features visuelles ─────────────────────────────────────────
+def extract_features(image: np.ndarray) -> np.ndarray:
+    """
+    Extrait un vecteur de features de l'image de seringue.
+    Combine histogramme de luminosite + structure pixellique.
+    """
+    h, w = image.shape[:2]
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+ 
+    # Bande centrale (zone de la seringue)
+    cx   = w // 2
+    half = max(10, int(w * 0.20))
+    strip = gray[:, max(0, cx - half):min(w, cx + half)]
+ 
+    # Histogramme normalise (64 bins)
+    hist = cv2.calcHist([strip], [0], None, [64], [0, 256])
+    hist = (hist.flatten() / (hist.sum() + 1e-8)).astype(np.float32)
+ 
+    # Miniature structurelle (16x32 = 512 valeurs)
+    thumb = cv2.resize(strip, (16, 32)).astype(np.float32) / 255.0
+ 
+    return np.concatenate([hist * HIST_WEIGHT, thumb.flatten() * STRUCT_WEIGHT])
+ 
+ 
+def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    n = min(len(a), len(b))
+    a, b = a[:n].astype(np.float64), b[:n].astype(np.float64)
+    na, nb = np.linalg.norm(a), np.linalg.norm(b)
+    if na < 1e-10 or nb < 1e-10:
+        return 0.0
+    return float(np.dot(a, b) / (na * nb))
+ 
+ 
+# ── Detection directe du piston ───────────────────────────────────────────────
+def _dark_bands(
+    strip: np.ndarray,
+    thresh: int,
+    frac_min: float,
+    min_h: int,
+) -> List[Tuple[int, int, float]]:
+    per_row = (strip < thresh).mean(axis=1).astype(np.float32)
+    smooth  = np.convolve(per_row, np.ones(SMOOTH_WIN) / SMOOTH_WIN, mode="same")
+    bands: List[Tuple[int, int, float]] = []
+    in_b = False
+    y0   = 0
+    h    = len(smooth)
+    for y, v in enumerate(smooth):
+        if v >= frac_min and not in_b:
+            in_b = True; y0 = y
+        elif v < frac_min and in_b:
+            in_b = False
+            if y - y0 >= min_h:
+                bands.append((y0, y, float(smooth[y0:y].mean())))
+    if in_b and h - y0 >= min_h:
+        bands.append((y0, h, float(smooth[y0:h].mean())))
+    return bands
+ 
+ 
+def _select_piston_band(
+    bands: List[Tuple[int, int, float]],
+    img_height: int,
+) -> Optional[Tuple[int, int, float]]:
+    """
+    Parmi toutes les bandes sombres, choisit celle qui correspond au piston.
+    Regles:
+      - Ignorer les bandes dans les 5% tout en bas (fond noir de la table)
+      - Choisir la bande avec le meilleur score (taille x intensite)
+        parmi celles dans les 92% superieurs de l'image
+    """
+    max_y = int(img_height * 0.92)
+    valid = [b for b in bands if b[0] < max_y and (b[1] - b[0]) >= MIN_PISTON_HEIGHT]
+    if not valid:
+        return None
+    return max(valid, key=lambda b: (b[1] - b[0]) * b[2])
+ 
+ 
+def _ratio_to_volume(ratio: float) -> float:
+    frac   = (ratio - Y_RATIO_AT_60ML) / max(Y_RATIO_AT_10ML - Y_RATIO_AT_60ML, 1e-8)
+    volume = 60.0 - frac * 50.0
+    return float(max(SYRINGE_MIN_ML, min(SYRINGE_MAX_ML, volume)))
+ 
+ 
+def detect_piston(image: np.ndarray) -> Optional[PistonReading]:
+    """
+    Detecte le piston caoutchouc noir et retourne sa position + volume estime.
+    """
+    h, w = image.shape[:2]
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+ 
+    cx    = w // 2
+    half  = max(6, int(w * STRIP_HALF_FRAC))
+    strip = gray[:, max(0, cx - half):min(w, cx + half)]
+ 
+    # Tentative 1 : seuil strict
+    bands  = _dark_bands(strip, DARK_THRESH,    DARK_FRAC_MIN, MIN_PISTON_HEIGHT)
+    method = "primary"
+ 
+    # Tentative 2 : seuil permissif
+    if not bands:
+        bands  = _dark_bands(strip, FALLBACK_THRESH, FALLBACK_FRAC, FALLBACK_HEIGHT)
+        method = "fallback"
+ 
+    best = _select_piston_band(bands, h)
+    if best is None:
+        return None
+ 
+    piston_y  = best[0]
+    ratio     = piston_y / max(h - 1, 1)
+    volume_ml = _ratio_to_volume(ratio)
+ 
+    # Confiance
+    c_intensity = float(np.clip(best[2] / 0.40, 0.0, 1.0))
+    c_size      = float(np.clip((best[1] - best[0]) / 25.0, 0.0, 1.0))
+    c_range     = 1.0 if 0.0 <= volume_ml <= SYRINGE_TOTAL_ML else 0.5
+    confidence  = float(np.clip(0.5 * c_intensity + 0.3 * c_size + 0.2 * c_range, 0.0, 1.0))
+ 
+    return PistonReading(
+        volume_ml    = volume_ml,
+        piston_y_px  = piston_y,
+        piston_ratio = ratio,
+        confidence   = confidence,
+        method       = method,
     )
-
-
-def build_center_roi(proc: Dict[str, np.ndarray], tube: TubeModel) -> Tuple[np.ndarray, Dict[str, int]]:
-    normalized = proc["normalized"]
-    h, _ = normalized.shape
-    ys = [int(0.2 * h), int(0.5 * h), int(0.8 * h)]
-    centers, widths = [], []
-    for y in ys:
-        left  = x_at_y(tube.left_slope,  tube.left_intercept,  y)
-        right = x_at_y(tube.right_slope, tube.right_intercept, y)
-        centers.append((left + right) / 2.0)
-        widths.append(right - left)
-    center_x    = int(round(float(np.median(centers))))
-    tube_width  = int(round(float(np.median(widths))))
-    roi_half    = max(4, int(round(tube_width * CENTER_ROI_WIDTH_FRACTION / 2.0)))
-    x0 = max(0, center_x - roi_half)
-    x1 = min(normalized.shape[1], center_x + roi_half)
-    if x1 - x0 < 4:
-        raise ValueError("center_roi_invalid")
-    return normalized[:, x0:x1], {"x0": x0, "x1": x1, "center_x": center_x}
-
-
-def detect_scale_calibration(proc: Dict[str, np.ndarray], tube: TubeModel) -> Dict[str, float]:
-    grad_y = np.abs(proc["grad_y"])
-    h, _ = grad_y.shape
-    row_profile = np.zeros(h, dtype=np.float32)
-    for y in range(10, h - 10):
-        left  = int(round(x_at_y(tube.left_slope,  tube.left_intercept,  y))) + 2
-        right = int(round(x_at_y(tube.right_slope, tube.right_intercept, y))) - 2
-        if right - left < 8:
-            continue
-        row_profile[y] = float(np.mean(grad_y[y, left:right]))
-    row_profile = smooth_1d(row_profile, 9, 2.2)
-    search = row_profile[20:h - 20]
-    if search.size < 40:
-        raise ValueError("scale_profile_invalid")
-    threshold = float(np.percentile(search, 82))
-    peak_rows = [
-        y for y in range(21, h - 21)
-        if row_profile[y] >= threshold
-        and row_profile[y] >= row_profile[y - 1]
-        and row_profile[y] >= row_profile[y + 1]
-    ]
-    if len(peak_rows) < 8:
-        raise ValueError("graduations_not_found")
-    clusters: List[List[float]] = [[float(peak_rows[0])]]
-    for value in peak_rows[1:]:
-        if value - clusters[-1][-1] <= 4:
-            clusters[-1].append(float(value))
+ 
+ 
+# ── Base de donnees de references ─────────────────────────────────────────────
+class ReferenceDatabase:
+    """
+    Gere la base de donnees d'images de reference.
+ 
+    Chaque image de reference est associee a un volume connu.
+    La base est stockee dans database/ avec un fichier d'index JSON.
+    """
+ 
+    def _init_(self, db_dir: Path = DB_DIR):
+        self.db_dir  = Path(db_dir)
+        self.index_file = self.db_dir / "db_index.json"
+        self.entries: List[ReferenceEntry] = []
+        self.db_dir.mkdir(parents=True, exist_ok=True)
+ 
+    # ── Chargement ────────────────────────────────────────────────────────────
+    def load(self) -> int:
+        """
+        Charge toutes les images de reference depuis le dossier database/.
+        Retourne le nombre d'entrees chargees.
+        """
+        self.entries.clear()
+ 
+        if not self.index_file.exists():
+            print("[DB] Aucun index trouve. Utilisez add_image() ou build_database_from_originals().")
+            return 0
+ 
+        with open(self.index_file, encoding="utf-8") as f:
+            index: Dict[str, dict] = json.load(f)
+ 
+        loaded = 0
+        for filename, meta in index.items():
+            img_path = self.db_dir / filename
+            if not img_path.exists():
+                print(f"[DB] Image manquante : {img_path}")
+                continue
+            img = cv2.imread(str(img_path))
+            if img is None:
+                continue
+            features = extract_features(img)
+            self.entries.append(ReferenceEntry(
+                filename  = filename,
+                volume_ml = float(meta["volume_ml"]),
+                features  = features,
+            ))
+            loaded += 1
+ 
+        print(f"[DB] {loaded} references chargees depuis {self.db_dir}/")
+        return loaded
+ 
+    # ── Ajout d'une image ─────────────────────────────────────────────────────
+    def add_image(self, image_path: str, volume_ml: float) -> bool:
+        """
+        Ajoute une image de reference a la base de donnees.
+ 
+        Args:
+            image_path: Chemin vers l'image source.
+            volume_ml:  Volume reel associe a cette image.
+ 
+        Returns:
+            True si l'ajout a reussi.
+        """
+        src = Path(image_path)
+        if not src.exists():
+            print(f"[DB] Image introuvable : {src}")
+            return False
+ 
+        img = cv2.imread(str(src))
+        if img is None:
+            print(f"[DB] Impossible de lire : {src}")
+            return False
+ 
+        # Copier dans le dossier database/
+        dest_name = src.name
+        dest_path = self.db_dir / dest_name
+        if dest_path.exists():
+            # Eviter les doublons en ajoutant un suffixe
+            stem = src.stem
+            ext  = src.suffix
+            i    = 1
+            while (self.db_dir / f"{stem}_{i}{ext}").exists():
+                i += 1
+            dest_name = f"{stem}_{i}{ext}"
+            dest_path = self.db_dir / dest_name
+ 
+        shutil.copy2(str(src), str(dest_path))
+ 
+        # Mettre a jour l'index
+        index = self._load_index()
+        index[dest_name] = {"volume_ml": volume_ml}
+        self._save_index(index)
+ 
+        # Ajouter en memoire
+        features = extract_features(img)
+        self.entries.append(ReferenceEntry(
+            filename  = dest_name,
+            volume_ml = volume_ml,
+            features  = features,
+        ))
+        print(f"[DB] Ajout : {dest_name} -> {volume_ml} ml")
+        return True
+ 
+    # ── Import des 20 images originales ───────────────────────────────────────
+    def build_from_originals(
+        self,
+        originals_dir: str,
+        name_to_volume: Optional[Dict[str, float]] = None,
+    ) -> int:
+        """
+        Importe les images de reference originales dans la base de donnees.
+        Detecte automatiquement le volume de chaque image si name_to_volume
+        n'est pas fourni.
+ 
+        Args:
+            originals_dir:   Dossier contenant les images originales.
+            name_to_volume:  Dictionnaire optionnel {nom_fichier: volume_ml}.
+                             Si absent, le volume est detecte automatiquement.
+ 
+        Returns:
+            Nombre d'images importees.
+ 
+        Exemple:
+            db.build_from_originals(
+                "originals/",
+                name_to_volume={
+                    "1.png": 10.0, "2.png": 10.0, ..., "10.png": 10.0,
+                    "51.png": 60.0, "52.png": 60.0, ..., "60.png": 60.0,
+                }
+            )
+        """
+        orig_dir = Path(originals_dir)
+        if not orig_dir.exists():
+            print(f"[DB] Dossier introuvable : {orig_dir}")
+            return 0
+ 
+        imported = 0
+        for img_file in sorted(orig_dir.glob(".png")) + sorted(orig_dir.glob(".jpg")):
+            img = cv2.imread(str(img_file))
+            if img is None:
+                continue
+ 
+            # Volume : depuis le dictionnaire ou detection automatique
+            if name_to_volume and img_file.name in name_to_volume:
+                volume_ml = name_to_volume[img_file.name]
+            else:
+                reading = detect_piston(img)
+                if reading is None:
+                    print(f"[DB] Piston non detecte, image ignoree : {img_file.name}")
+                    continue
+                volume_ml = reading.volume_ml
+ 
+            if self.add_image(str(img_file), volume_ml):
+                imported += 1
+ 
+        print(f"[DB] Import termine : {imported} images")
+        return imported
+ 
+    # ── Recherche du plus proche voisin ───────────────────────────────────────
+    def find_closest(
+        self,
+        query_features: np.ndarray,
+        top_k: int = TOP_K_MATCHES,
+    ) -> List[Tuple[ReferenceEntry, float]]:
+        """
+        Trouve les top_k images de reference les plus similaires.
+ 
+        Returns:
+            Liste de (ReferenceEntry, score) triee par score decroissant.
+        """
+        if not self.entries:
+            return []
+ 
+        scored = [
+            (entry, _cosine_similarity(query_features, entry.features))
+            for entry in self.entries
+        ]
+        scored.sort(key=lambda x: -x[1])
+        return scored[:top_k]
+ 
+    # ── Helpers internes ──────────────────────────────────────────────────────
+    def _load_index(self) -> dict:
+        if self.index_file.exists():
+            with open(self.index_file, encoding="utf-8") as f:
+                return json.load(f)
+        return {}
+ 
+    def _save_index(self, index: dict) -> None:
+        with open(self.index_file, "w", encoding="utf-8") as f:
+            json.dump(index, f, indent=2, ensure_ascii=False)
+ 
+    @property
+    def size(self) -> int:
+        return len(self.entries)
+ 
+    def is_empty(self) -> bool:
+        return len(self.entries) == 0
+ 
+ 
+# ── Lecture de volume avec validation par la DB ───────────────────────────────
+def read_volume(
+    image: np.ndarray,
+    db: ReferenceDatabase,
+) -> MatchResult:
+    """
+    Lit le volume d'une image en combinant :
+      - Detection directe du piston (methode principale)
+      - Comparaison avec la base de donnees (validation)
+ 
+    Le volume final est la moyenne ponderee des deux estimations.
+ 
+    Args:
+        image: Image BGR de la seringue.
+        db:    Base de donnees de references chargee.
+ 
+    Returns:
+        MatchResult avec le volume final et les details de comparaison.
+    """
+    h, w = image.shape[:2]
+ 
+    # 1. Detection directe
+    piston = detect_piston(image)
+    direct_vol  = piston.volume_ml if piston else 30.0  # valeur par defaut si echec
+    direct_conf = piston.confidence if piston else 0.0
+ 
+    # 2. Comparaison avec la DB
+    features = extract_features(image)
+    matches  = db.find_closest(features, top_k=TOP_K_MATCHES)
+ 
+    if matches:
+        # Volume DB = moyenne ponderee des top-K references par leur score
+        total_score = sum(m[1] for m in matches)
+        if total_score > 0:
+            db_vol = sum(e.volume_ml * s for e, s in matches) / total_score
         else:
-            clusters.append([float(value)])
-    lines = [float(np.mean(c)) for c in clusters]
-    if len(lines) < 6:
-        raise ValueError("graduation_lines_too_few")
-    diffs = np.diff(lines).astype(np.float32)
-    plausible = [float(d) for d in diffs
-                 if 0.55 * PX_PER_ML_FIXED <= d <= 1.45 * PX_PER_ML_FIXED]
-    if len(plausible) >= 3:
-        px_per_ml = float(np.median(plausible))
-    elif len(diffs) >= 3:
-        px_per_ml = float(np.median(diffs))
+            db_vol = matches[0][0].volume_ml
+ 
+        best_entry = matches[0][0]
+        best_score = matches[0][1]
     else:
-        px_per_ml = PX_PER_ML_FIXED
-    y0_candidates = [l for l in lines if abs(l - Y0_REFERENCE_PX) <= 60]
-    y0_px = (min(y0_candidates, key=lambda y: abs(y - Y0_REFERENCE_PX))
-             if y0_candidates else Y0_REFERENCE_PX)
-    spacing_cv = (float(np.std(plausible) / max(np.mean(plausible), 1.0))
-                  if len(plausible) >= 2 else 0.25)
-    confidence  = 0.35
-    confidence += 0.30 * max(0.0, 1.0 - min(spacing_cv, 0.30) / 0.30)
-    confidence += 0.20 * min(1.0, len(lines) / 12.0)
-    confidence += 0.15 * max(0.0, 1.0 - abs(px_per_ml - PX_PER_ML_FIXED) / PX_PER_ML_FIXED)
-    return {
-        "y0_px":      float(y0_px),
-        "px_per_ml":  float(px_per_ml),
-        "mm_per_px":  float(MM_PER_ML_REFERENCE / px_per_ml),
-        "confidence": float(max(0.0, min(1.0, confidence))),
-        "line_count": len(lines),
-    }
-
-
-def detect_meniscus_visual(center_roi: np.ndarray, proc: Dict[str, np.ndarray],
-                           tube: TubeModel, y0_px: float,
-                           px_per_ml: float) -> Dict[str, float]:
-    roi = center_roi.astype(np.float32)
-    h, w = roi.shape
-    search_start = max(12, int(y0_px - 0.4 * px_per_ml))
-    search_end   = min(h - 12, int(min(h - 12, y0_px + (MAX_VOLUME_ML + 0.8) * px_per_ml)))
-    if search_end <= search_start + 20:
-        raise ValueError("meniscus_search_invalid")
-    clahe      = cv2.createCLAHE(clipLimit=3.5, tileGridSize=(8, 8))
-    roi_uint8  = (np.clip(roi, 0, 255).astype(np.float32) / 255.0 * 255).astype(np.uint8)
-    roi_enh    = clahe.apply(roi_uint8).astype(np.float32)
-    kernel     = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 7))
-    roi_clean  = cv2.morphologyEx(roi_enh.astype(np.uint8), cv2.MORPH_OPEN, kernel).astype(np.float32)
-    grad_y     = cv2.Sobel(roi_clean, cv2.CV_32F, 0, 1, ksize=3)
-    grad_x     = cv2.Sobel(roi_clean, cv2.CV_32F, 1, 0, ksize=3)
-    score      = np.abs(grad_y) * 1.2 + np.abs(grad_x) * 0.4
-    row_scores = score.mean(axis=1)
-    smooth_rows = smooth_1d(row_scores, 15, 2.5)
-    candidates: List[float] = []
-    strength_vals: List[float] = []
-    for col in range(1, w - 1):
-        col_score = score[:, col]
-        local     = col_score[search_start:search_end]
-        if local.size == 0:
-            continue
-        peak_idx   = int(np.argmax(local))
-        peak_value = float(local[peak_idx])
-        if peak_value <= 1e-3:
-            continue
-        score_baseline = float(np.median(local) + 1e-6)
-        if peak_value < score_baseline * 1.8:
-            continue
-        candidates.append(float(search_start + peak_idx))
-        strength_vals.append(peak_value / score_baseline)
-    if not candidates:
-        raise ValueError("meniscus_not_found")
-    candidates_arr = np.asarray(candidates, dtype=np.float32)
-    meniscus_y     = float(np.percentile(candidates_arr, 85))
-    col_spread     = float(np.percentile(np.abs(candidates_arr - np.median(candidates_arr)), 75))
-    if col_spread > MAX_COLUMN_SPREAD_PX * 2:
-        raise ValueError("meniscus_column_instability")
-    strength_arr   = np.asarray(strength_vals, dtype=np.float32)
-    strength_conf  = float(np.clip((np.median(strength_arr) - 1.0) / 4.0, 0.0, 1.0))
-    consist_conf   = float(np.clip(1.0 - min(col_spread, 10.0) / 10.0, 0.0, 1.0))
-    row_peak       = float(np.max(smooth_rows[search_start:search_end]))
-    row_median     = float(np.median(smooth_rows[search_start:search_end]) + 1e-6)
-    line_contrast  = float(np.clip((row_peak - row_median) / (row_median + 1e-6), 0.0, 1.0))
-    confidence     = float(np.clip(0.4 * strength_conf + 0.4 * consist_conf + 0.2 * line_contrast, 0.0, 1.0))
-    relative_ml    = (meniscus_y - y0_px) / px_per_ml
-    if not (-0.5 <= relative_ml <= MAX_VOLUME_ML + 0.5):
-        raise ValueError("volume_out_of_range")
-    return {
-        "meniscus_px":      float(meniscus_y),
-        "relative_ml":      float(max(0.0, min(MAX_VOLUME_ML, relative_ml))),
-        "confidence":       confidence,
-        "column_spread_px": float(col_spread),
-        "second_peak_ratio": float(np.median(strength_arr)),
-    }
-
-
-def compute_volume_from_scale(meniscus_y: float, y0_px: float, px_per_ml: float) -> float:
-    volume = (meniscus_y - y0_px) / px_per_ml
-    return float(max(0.0, min(MAX_VOLUME_ML, volume)))
-
-
-# ── Main entry point — called by dosing router when ESP-CAM uploads image ─────
-def process_dosing_image(image_path: str, liquid: str) -> Dict[str, Optional[float]]:
+        # Pas de references : utiliser uniquement la detection directe
+        db_vol     = direct_vol
+        best_entry = None
+        best_score = 0.0
+ 
+    # 3. Volume final : fusion detection directe + DB
+    if db.is_empty() or best_score < 0.50:
+        # DB peu fiable ou vide : on fait confiance a la detection directe
+        final_vol  = direct_vol
+        confidence = direct_conf
+    elif direct_conf < 0.40:
+        # Detection directe peu fiable : on fait confiance a la DB
+        final_vol  = db_vol
+        confidence = float(np.clip(best_score, 0.0, 1.0))
+    else:
+        # Les deux sont fiables : moyenne ponderee
+        w_direct = direct_conf
+        w_db     = float(np.clip(best_score, 0.0, 1.0))
+        total_w  = w_direct + w_db
+        final_vol = (direct_vol * w_direct + db_vol * w_db) / max(total_w, 1e-8)
+        confidence = float(np.clip((w_direct + w_db) / 2.0, 0.0, 1.0))
+ 
+    final_vol = float(max(SYRINGE_MIN_ML, min(SYRINGE_MAX_ML, final_vol)))
+ 
+    return MatchResult(
+        volume_ml       = round(final_vol, 2),
+        direct_volume   = round(direct_vol, 2),
+        db_volume       = round(db_vol, 2),
+        best_match_file = best_entry.filename if best_entry else "aucune",
+        match_score     = round(best_score, 3),
+        confidence      = round(confidence, 3),
+    )
+ 
+ 
+# ── Calcul chimique ───────────────────────────────────────────────────────────
+def compute_moles(volume_ml: float, liquid: str) -> Tuple[float, float]:
+    props         = LIQUID_PROPERTIES.get(liquid, {"concentration": 0.1})
+    concentration = float(props["concentration"])
+    moles         = concentration * (volume_ml / 1000.0)
+    return round(moles, 6), concentration
+ 
+ 
+# ══════════════════════════════════════════════════════════════════════════════
+# POINTS D'ENTREE PRINCIPAUX
+# ══════════════════════════════════════════════════════════════════════════════
+ 
+def process_dosing_image(
+    image_path: str,
+    liquid: str,
+    db: Optional[ReferenceDatabase] = None,
+) -> Dict:
     """
-    Called by the FastAPI dosing router after saving the ESP-CAM image.
-    Returns volume_ml, moles, concentration — or None values if detection fails.
+    Analyse UNE image et retourne le volume courant de la seringue.
+ 
+    Args:
+        image_path: Chemin vers l'image ESP-CAM.
+        liquid:     Liquide utilise (cle dans LIQUID_PROPERTIES).
+        db:         Base de donnees de references (optionnel).
+                    Si None, utilise uniquement la detection directe.
+ 
+    Returns:
+        {
+          "volume_ml":     float,   volume de la seringue
+          "moles":         float,
+          "concentration": float,
+          "confidence":    float,
+          "direct_volume": float,   volume par detection directe
+          "db_volume":     float,   volume par comparaison DB
+          "best_match":    str,     image de reference la plus proche
+          "match_score":   float,
+        }
     """
-    result: Dict[str, Optional[float]] = {
+    result = {
         "volume_ml":     None,
         "moles":         None,
         "concentration": None,
         "confidence":    None,
+        "direct_volume": None,
+        "db_volume":     None,
+        "best_match":    None,
+        "match_score":   None,
     }
-
-    try:
-        image = cv2.imread(image_path)
-        if image is None:
-            print(f"[processor] Could not read image: {image_path}")
-            return result
-
-        # Run the strict burette detection pipeline
-        proc                     = preprocess_image(image)
-        roi_left, roi_right      = estimate_tube_roi(proc)
-        tube                     = fit_tube_model(proc, roi_left, roi_right)
-        center_roi, _            = build_center_roi(proc, tube)
-        calibration              = detect_scale_calibration(proc, tube)
-        meniscus                 = detect_meniscus_visual(
-                                       center_roi, proc, tube,
-                                       calibration["y0_px"], calibration["px_per_ml"])
-        volume_ml                = compute_volume_from_scale(
-                                       meniscus["meniscus_px"],
-                                       calibration["y0_px"],
-                                       calibration["px_per_ml"])
-
-        # Calculate moles from volume and liquid concentration
-        props         = LIQUID_PROPERTIES.get(liquid, {"concentration": 0.1})
-        concentration = props["concentration"]
-        moles         = concentration * (volume_ml / 1000.0)
-
-        result["volume_ml"]     = round(volume_ml, 3)
-        result["moles"]         = round(moles, 6)
-        result["concentration"] = concentration
-        result["confidence"]    = round(meniscus["confidence"], 3)
-
-        print(f"[processor] {liquid}: {volume_ml:.3f} mL, "
-              f"{moles:.6f} mol, conf={meniscus['confidence']:.2f}")
-
-    except ValueError as e:
-        # Known failure modes from the detection pipeline
-        print(f"[processor] Detection failed ({e}): {image_path}")
-    except Exception as e:
-        print(f"[processor] Unexpected error: {e}")
-
-    return result
-
-
-# ── Syringe piston detection ──────────────────────────────────────────────────
-# Detects the dark rubber piston in a syringe image and returns volume in mL
-
-SYRINGE_VOLUME_ML    = 60.0   # total syringe volume
-SYRINGE_X_FRAC_START = 0.30   # left edge of syringe as fraction of image width
-SYRINGE_X_FRAC_END   = 0.70   # right edge of syringe
-SYRINGE_Y_FRAC_TOP   = 0.05   # top of scale as fraction of image height
-SYRINGE_Y_FRAC_BOT   = 0.95   # bottom of scale
-PISTON_BLACK_THRESH  = 80     # pixel brightness below this = dark piston
-PISTON_DARK_RATIO    = 0.40   # fraction of row that must be dark
-
-
-def detect_piston_volume(image_path: str) -> Optional[float]:
-    """
-    Detects the dark rubber piston in a syringe image.
-    Returns volume in mL remaining below the piston, or None if not detected.
-    """
+ 
     image = cv2.imread(image_path)
     if image is None:
-        print(f"[processor] Could not read image: {image_path}")
-        return None
-
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    h, w = gray.shape
-
-    x_start = int(w * SYRINGE_X_FRAC_START)
-    x_end   = int(w * SYRINGE_X_FRAC_END)
-    y_top   = int(h * SYRINGE_Y_FRAC_TOP)
-    y_bot   = int(h * SYRINGE_Y_FRAC_BOT)
-    line_w  = x_end - x_start
-
-    piston_y = -1
-    for y in range(y_top, y_bot):
-        row = gray[y, x_start:x_end]
-        dark_count = int(np.sum(row < PISTON_BLACK_THRESH))
-        if dark_count > line_w * PISTON_DARK_RATIO:
-            piston_y = y
-            break
-
-    if piston_y < 0:
-        print(f"[processor] Piston not detected in: {image_path}")
-        return None
-
-    # Piston near top = full syringe, near bottom = empty
-    ratio     = (piston_y - y_top) / max(y_bot - y_top, 1)
-    volume_ml = SYRINGE_VOLUME_ML * (1.0 - ratio)
-    volume_ml = max(0.0, min(SYRINGE_VOLUME_ML, volume_ml))
-
-    print(f"[processor] Piston Y={piston_y} → {volume_ml:.2f} mL")
-    return round(volume_ml, 2)
-
-
-def process_syringe_pair(before_path: str, after_path: str, liquid: str) -> Dict[str, Optional[float]]:
-    """
-    Calculates volume dispensed from a syringe using before/after piston positions.
-    Volume dispensed = volume_before - volume_after.
-    """
-    result: Dict[str, Optional[float]] = {
-        "volume_ml":     None,
-        "moles":         None,
-        "concentration": None,
-        "confidence":    None,
-    }
-
-    vol_before = detect_piston_volume(before_path)
-    vol_after  = detect_piston_volume(after_path)
-
-    if vol_before is None or vol_after is None:
-        print(f"[processor] Syringe pair detection failed")
+        print(f"[processor] Impossible de lire : {image_path}")
         return result
-
-    volume_ml = vol_before - vol_after
-    if volume_ml < 0:
-        volume_ml = abs(volume_ml)
-
-    props         = LIQUID_PROPERTIES.get(liquid, {"concentration": 0.1})
-    concentration = props["concentration"]
-    moles         = concentration * (volume_ml / 1000.0)
-
-    result["volume_ml"]     = round(volume_ml, 3)
-    result["moles"]         = round(moles, 6)
-    result["concentration"] = concentration
-    result["confidence"]    = 1.0
-
-    print(f"[processor] syringe {liquid}: before={vol_before}mL after={vol_after}mL "
-          f"dispensed={volume_ml:.3f}mL")
-
+ 
+    if db is not None and not db.is_empty():
+        match = read_volume(image, db)
+    else:
+        piston = detect_piston(image)
+        if piston is None:
+            print(f"[processor] Piston non detecte : {image_path}")
+            return result
+        match = MatchResult(
+            volume_ml       = piston.volume_ml,
+            direct_volume   = piston.volume_ml,
+            db_volume       = piston.volume_ml,
+            best_match_file = "aucune",
+            match_score     = 0.0,
+            confidence      = piston.confidence,
+        )
+ 
+    moles, concentration = compute_moles(match.volume_ml, liquid)
+ 
+    result.update({
+        "volume_ml":     match.volume_ml,
+        "moles":         moles,
+        "concentration": concentration,
+        "confidence":    match.confidence,
+        "direct_volume": match.direct_volume,
+        "db_volume":     match.db_volume,
+        "best_match":    match.best_match_file,
+        "match_score":   match.match_score,
+    })
+ 
+    print(
+        f"[processor] {liquid}: {match.volume_ml:.2f} ml  "
+        f"(direct={match.direct_volume:.2f}  db={match.db_volume:.2f})  "
+        f"match={match.best_match_file} score={match.match_score:.2f}  "
+        f"conf={match.confidence:.2f}"
+    )
     return result
-
-
-def process_dosing_pair(before_path: str, after_path: str, liquid: str) -> Dict[str, Optional[float]]:
+ 
+ 
+def process_dosing_pair(
+    before_path: str,
+    after_path: str,
+    liquid: str,
+    db: Optional[ReferenceDatabase] = None,
+) -> Dict:
     """
-    Called when both before and after images are available.
-    Volume dispensed = meniscus_before - meniscus_after (burette reads top-down).
+    Calcule le volume distribue entre deux etats de la seringue.
+ 
+    Compare les images avant et apres dosage (chacune avec la DB de references)
+    et retourne la difference de volume = volume distribue.
+ 
+    Args:
+        before_path: Image de la seringue AVANT dosage.
+        after_path:  Image de la seringue APRES dosage.
+        liquid:      Liquide utilise.
+        db:          Base de donnees de references (optionnel).
+ 
+    Returns:
+        {
+          "volume_before_ml":  float,
+          "volume_after_ml":   float,
+          "dispensed_ml":      float,   <- difference = volume distribue
+          "moles":             float,
+          "concentration":     float,
+          "confidence_before": float,
+          "confidence_after":  float,
+          "liquid":            str,
+          "details_before":    dict,    lecture complete avant
+          "details_after":     dict,    lecture complete apres
+        }
     """
-    result: Dict[str, Optional[float]] = {
-        "volume_ml":     None,
-        "moles":         None,
-        "concentration": None,
-        "confidence":    None,
+    null_result = {
+        "volume_before_ml":  None,
+        "volume_after_ml":   None,
+        "dispensed_ml":      None,
+        "moles":             None,
+        "concentration":     None,
+        "confidence_before": None,
+        "confidence_after":  None,
+        "liquid":            liquid,
+        "details_before":    None,
+        "details_after":     None,
     }
-
-    try:
-        def read_meniscus(image_path: str):
-            image = cv2.imread(image_path)
-            if image is None:
-                raise ValueError(f"Could not read image: {image_path}")
-            proc            = preprocess_image(image)
-            roi_left, roi_right = estimate_tube_roi(proc)
-            tube            = fit_tube_model(proc, roi_left, roi_right)
-            center_roi, _   = build_center_roi(proc, tube)
-            calibration     = detect_scale_calibration(proc, tube)
-            meniscus        = detect_meniscus_visual(
-                                  center_roi, proc, tube,
-                                  calibration["y0_px"], calibration["px_per_ml"])
-            volume          = compute_volume_from_scale(
-                                  meniscus["meniscus_px"],
-                                  calibration["y0_px"],
-                                  calibration["px_per_ml"])
-            return volume, meniscus["confidence"]
-
-        vol_before, conf_before = read_meniscus(before_path)
-        vol_after,  conf_after  = read_meniscus(after_path)
-
-        # Volume dispensed is the drop in burette reading
-        volume_ml = vol_after - vol_before
-        if volume_ml < 0:
-            volume_ml = abs(volume_ml)
-
-        props         = LIQUID_PROPERTIES.get(liquid, {"concentration": 0.1})
-        concentration = props["concentration"]
-        moles         = concentration * (volume_ml / 1000.0)
-        confidence    = round((conf_before + conf_after) / 2, 3)
-
-        result["volume_ml"]     = round(volume_ml, 3)
-        result["moles"]         = round(moles, 6)
-        result["concentration"] = concentration
-        result["confidence"]    = confidence
-
-        print(f"[processor] pair {liquid}: before={vol_before:.3f}mL after={vol_after:.3f}mL "
-              f"dispensed={volume_ml:.3f}mL conf={confidence}")
-
-    except ValueError as e:
-        print(f"[processor] Pair detection failed ({e})")
-    except Exception as e:
-        print(f"[processor] Unexpected error in pair: {e}")
-
-    return result
+ 
+    print(f"[processor] Lecture AVANT  : {before_path}")
+    r_before = process_dosing_image(before_path, liquid, db)
+ 
+    print(f"[processor] Lecture APRES  : {after_path}")
+    r_after  = process_dosing_image(after_path,  liquid, db)
+ 
+    if r_before["volume_ml"] is None or r_after["volume_ml"] is None:
+        print("[processor] Echec lecture avant/apres.")
+        return null_result
+ 
+    vol_before   = r_before["volume_ml"]
+    vol_after    = r_after["volume_ml"]
+    dispensed_ml = abs(vol_before - vol_after)
+ 
+    moles, concentration = compute_moles(dispensed_ml, liquid)
+ 
+    print(
+        f"[processor] Avant={vol_before:.2f} ml  "
+        f"Apres={vol_after:.2f} ml  "
+        f"Distribue={dispensed_ml:.2f} ml  "
+        f"Moles={moles:.6f}"
+    )
+ 
+    return {
+        "volume_before_ml":  vol_before,
+        "volume_after_ml":   vol_after,
+        "dispensed_ml":      round(dispensed_ml, 2),
+        "moles":             moles,
+        "concentration":     concentration,
+        "confidence_before": r_before["confidence"],
+        "confidence_after":  r_after["confidence"],
+        "liquid":            liquid,
+        "details_before":    r_before,
+        "details_after":     r_after,
+    }
+ 
+ 
+# ── Constructeur de base de donnees depuis les images originales ──────────────
+def build_database_from_originals(
+    originals_dir: str = ".",
+    db_dir: str = "database",
+) -> ReferenceDatabase:
+    """
+    Construit la base de donnees depuis les 20 images originales.
+    Detecte automatiquement le volume de chaque image.
+ 
+    Mapping connu pour les images originales :
+      1.png  - 10.png  -> piston en bas  (~5-17 ml selon position exacte)
+      51.png - 60.png  -> piston en haut (~53-60 ml)
+ 
+    Si tu preferes specifier les volumes manuellement, utilise :
+        db.add_image("1.png", 10.0)
+        db.add_image("51.png", 60.0)
+        ...
+ 
+    Returns:
+        ReferenceDatabase chargee et prete a l'emploi.
+    """
+    db = ReferenceDatabase(Path(db_dir))
+ 
+    # Volumes detectes automatiquement sur les images reelles
+    # (issus de la calibration initiale, tu peux les corriger)
+    known_volumes = {
+        "1.png":  10.0,  "2.png":  10.0,  "3.png":  10.0,
+        "4.png":  10.0,  "5.png":  13.0,  "6.png":  15.0,
+        "7.png":  17.0,  "8.png":  13.0,  "9.png":  15.0,
+        "10.png": 17.0,
+        "51.png": 59.0,  "52.png": 60.0,  "53.png": 60.0,
+        "54.png": 53.0,  "55.png": 60.0,  "56.png": 60.0,
+        "57.png": 58.0,  "58.png": 58.0,  "59.png": 55.0,
+        "60.png": 60.0,
+    }
+ 
+    db.build_from_originals(originals_dir, name_to_volume=known_volumes)
+    return db
+ 
+ 
+# ── Ligne de commande ─────────────────────────────────────────────────────────
+if _name_ == "_main_":
+    import argparse
+ 
+    parser = argparse.ArgumentParser(description="Lecture de volume de seringue")
+    parser.add_argument("images", nargs="+",
+                        help="1 image (lecture) ou 2 images (avant apres)")
+    parser.add_argument("--liquid",  default="Chlorine",
+                        help="Liquide (default: Chlorine)")
+    parser.add_argument("--db",      default="database",
+                        help="Dossier de la base de donnees (default: database)")
+    parser.add_argument("--build-db", metavar="ORIG_DIR",
+                        help="Construire la DB depuis un dossier d images originales")
+    args = parser.parse_args()
+ 
+    # Charger ou construire la base de donnees
+    db = ReferenceDatabase(Path(args.db))
+ 
+    if args.build_db:
+        db = build_database_from_originals(args.build_db, args.db)
+    else:
+        n = db.load()
+        if n == 0:
+            print("[INFO] Base de donnees vide : detection directe uniquement.")
+            db = None
+ 
+    # Traitement
+    if len(args.images) == 1:
+        result = process_dosing_image(args.images[0], args.liquid, db)
+    else:
+        result = process_dosing_pair(args.images[0], args.images[1], args.liquid, db)
+ 
+    print("\n" + "=" * 50)
+    print(json.dumps(result, indent=2, ensure_ascii=False))

@@ -136,7 +136,7 @@ def proxy_camera_stream():
     cam_url = f"http://{settings.CAMERA_IP}/stream"
     
     try:
-        r = req_lib.get(cam_url, stream=True, timeout=10)
+        r = req_lib.get(cam_url, stream=True, timeout=30)
         content_type = r.headers.get("Content-Type", "multipart/x-mixed-replace;boundary=123456789000000000000987654321")
         
         def generate():
