@@ -21,17 +21,6 @@ mosquitto -v
 - ESP-CAM (Dosing)    → HTTP POST /dosing/{id}/capture → image processing → DB
 - Frontend            → HTTP REST API
 
-## ESP32 MQTT payload format
-```json
-{
-  "project_id": "uuid-here",
-  "sample_id":  "uuid-here",
-  "parameter":  "pH",
-  "value":      7.2,
-  "unit":       ""
-}
-```
-Publish to: `waterlab/multisensor/{project_id}/data`
 
 ## ESP-CAM HTTP upload
 ```
